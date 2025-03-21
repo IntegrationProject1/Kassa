@@ -78,6 +78,3 @@ class RabbitMQHeartbeatStartup(models.AbstractModel):
     def _register_hook(self):
         """Start de heartbeat-thread bij Odoo startup."""
         self.env['rabbitmq.heartbeat'].start_heartbeat()
-
-
-        ## dit is een test
