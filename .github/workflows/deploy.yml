@@ -34,7 +34,7 @@ jobs:
 
     steps:
       - name: Setup SSH Connection
-        uses: appleboy/ssh-action@master
+        uses: appleboy/ssh-action@v1.1.0
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USERNAME }}
