@@ -31,11 +31,13 @@ jobs:
     name: Deploy to Server
     needs: build
     runs-on: ubuntu-latest
+    environment: environment
 
     steps:
       - name: Setup SSH Connection
         uses: appleboy/ssh-action@v1.1.0
         with:
+          debug: true
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USERNAME }}
           key: ${{ secrets.SSH_KEY }}
