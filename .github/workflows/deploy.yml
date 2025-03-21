@@ -1,0 +1,47 @@
+name: Odoo CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - Ddeployment  # Voer uit bij een push naar de 'main' branch
+
+jobs:
+  build:
+    name: Build & Test Odoo
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set Up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker Image
+        run: docker compose build
+
+      - name: Test Docker Compose
+        run: |
+          docker compose up -d
+          sleep 30  # Wacht tot services opstarten
+          docker ps  # Controleer draaiende containers
+          docker compose down  # Stop containers na test
+
+  deploy:
+    name: Deploy to Server
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup SSH Connection
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: integrationproject-2425s2-001.westeurope.cloudapp.azure.com
+          username: ehbstudent
+          key: wpqjf9mI3DKZdZDaa!
+          script: |
+            cd ~/kassa
+            git pull origin main
+            docker compose down
+            docker compose up -d --build
+            docker system prune -af
