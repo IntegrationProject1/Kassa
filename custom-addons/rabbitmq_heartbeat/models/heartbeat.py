@@ -80,4 +80,4 @@ class RabbitMQHeartbeatStartup(models.AbstractModel):
         self.env['rabbitmq.heartbeat'].start_heartbeat()
 
 
-        ##dit is een test
+        ##dit is een test2
