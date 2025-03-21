@@ -44,7 +44,7 @@ jobs:
           port: ${{ secrets.SSH_PORT }}
           script: |
             cd ~/kassa
-            git pull origin main
+            git pull origin
             docker compose down
             docker compose up -d --build
             docker system prune -af
