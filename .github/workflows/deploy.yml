@@ -36,9 +36,9 @@ jobs:
       - name: Setup SSH Connection
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: integrationproject-2425s2-001.westeurope.cloudapp.azure.com
-          username: ehbstudent
-          key: wpqjf9mI3DKZdZDaa!
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
           script: |
             cd ~/kassa
             git pull origin main
