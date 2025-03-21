@@ -33,6 +33,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Print SSH Host
+        run: echo ${{ secrets.SSH_HOST }}
+
+      - name: Print SSH Username
+        run: echo ${{ secrets.SSH_USERNAME }}
+
+      - name: Print SSH Key
+        run: echo ${{ secrets.SSH_KEY }}
+
       - name: Setup SSH Connection
         uses: appleboy/ssh-action@v1.0.3
         with:
