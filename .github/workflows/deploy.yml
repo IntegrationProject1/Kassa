@@ -34,12 +34,12 @@ jobs:
 
     steps:
       - name: Setup SSH Connection
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USERNAME }}
           key: ${{ secrets.SSH_KEY }}
-          port: 60022
+          port: ${{ secrets.SSH_PORT }}
           script: |
             cd ~/kassa
             git pull origin main
