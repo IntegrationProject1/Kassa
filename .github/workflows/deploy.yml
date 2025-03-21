@@ -3,7 +3,7 @@ name: Odoo CI/CD Pipeline
 on:
   push:
     branches:
-      - Ddeployment  # Voer uit bij een push naar de 'main' branch
+      - Deployment  # Voer uit bij een push naar de 'main' branch
 
 jobs:
   build:
