@@ -1,0 +1,51 @@
+name: Odoo CI/CD deploy Pipeline
+
+on:
+  push:
+    branches:
+      - Deployment  
+
+jobs:
+  build:
+    name: Build & Test Odoo
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set Up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker Image
+        run: docker compose build
+
+      - name: Test Docker Compose
+        run: |
+          docker compose up -d
+          sleep 10  # Wacht tot services opstarten
+          docker ps  # Controleer draaiende containers
+          docker inspect --format='{{json .State.Health}}' $(docker ps -q) | jq
+          docker compose down  # Stop containers na test
+
+  deploy:
+    name: Deploy to Server
+    needs: build
+    runs-on: ubuntu-latest
+    environment: environment
+
+    steps:
+      - name: Setup SSH Connection
+        uses: appleboy/ssh-action@v1.1.0
+        with:
+          debug: true
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            cd ~/kassa
+            git pull origin
+            docker compose down
+            docker compose up -d --build
+            docker system prune -af

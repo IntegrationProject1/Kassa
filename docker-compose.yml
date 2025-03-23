@@ -8,23 +8,10 @@ services:
     volumes:
       - odoo-db-data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "30060:5432"
     networks:
       - odoo_network
-    restart: always  # Added for automatic restart
-
-  rabbitmq:
-    image: rabbitmq:management
-    hostname: rabbitmq
-    environment:
-      - RABBITMQ_DEFAULT_USER=guest
-      - RABBITMQ_DEFAULT_PASS=guest
-    ports:
-      - "5672:5672"  
-      - "15672:15672" 
-    networks:
-      - odoo_network
-    restart: always  # Added for automatic restart
+    restart: always 
 
   odoo:
     build:
@@ -33,12 +20,11 @@ services:
     user: root
     depends_on:
       - db
-      - rabbitmq
     ports:
-      - "8069:8069"
+      - "30069:8069"
     volumes:
       - ./custom-addons:/mnt/extra-addons
-      - ./config:/etc/odoo  # Keep this!
+      - ./config:/etc/odoo 
       - odoo-web-data:/var/lib/odoo/web/static
       - ./data:/var/lib/odoo
     environment:
@@ -48,7 +34,7 @@ services:
       - RABBITMQ_HOST=rabbitmq  
     networks:
       - odoo_network
-    restart: always  # Added for automatic restart
+    restart: always  
 
 volumes:
   odoo-db-data:
