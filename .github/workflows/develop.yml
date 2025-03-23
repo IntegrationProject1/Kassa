@@ -1,9 +1,9 @@
-name: Odoo CI/CD deploy Pipeline
+name: Odoo CI/CD develop Pipeline
 
 on:
   push:
     branches:
-      - Deployment  
+      - Development  
 
 jobs:
   build:
@@ -27,25 +27,3 @@ jobs:
           docker ps  # Controleer draaiende containers
           docker inspect --format='{{json .State.Health}}' $(docker ps -q) | jq
           docker compose down  # Stop containers na test
-
-  deploy:
-    name: Deploy to Server
-    needs: build
-    runs-on: ubuntu-latest
-    environment: environment
-
-    steps:
-      - name: Setup SSH Connection
-        uses: appleboy/ssh-action@v1.1.0
-        with:
-          debug: true
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USERNAME }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT }}
-          script: |
-            cd ~/kassa
-            git pull origin
-            docker compose down
-            docker compose up -d --build
-            docker system prune -af
