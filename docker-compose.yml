@@ -2,15 +2,15 @@ services:
   db:
     image: postgres:15
     environment:
-      - POSTGRES_DB=postgres
-      - POSTGRES_USER=odoo
-      - POSTGRES_PASSWORD=odoo
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
-      - odoo-db-data:/var/lib/postgresql/data
+      - /data/postgres:/var/lib/postgresql/data
     ports:
       - "30060:5432"
     networks:
-      - odoo_network
+      - network  
     restart: always 
 
   odoo:
@@ -20,26 +20,32 @@ services:
     user: root
     depends_on:
       - db
+      - rabbitmq
     ports:
       - "30069:8069"
     volumes:
       - ./custom-addons:/mnt/extra-addons
-      - ./config:/etc/odoo 
+      - ./config:/etc/odoo
       - odoo-web-data:/var/lib/odoo/web/static
-      - ./data:/var/lib/odoo
+      - /data/odoo-data:/var/lib/odoo
     environment:
-      - HOST=db
-      - USER=odoo
-      - PASSWORD=odoo
-      - RABBITMQ_HOST=rabbitmq  
+      - HOST=${ODOO_HOST}
+      - USER=${ODOO_USER}
+      - PASSWORD=${ODOO_PASSWORD}
+      - RABBITMQ_HOST=${RABBITMQ_HOST}
+      - RABBITMQ_USER=${RABBITMQ_USER}
+      - RABBITMQ_PASS=${RABBITMQ_PASS}
     networks:
-      - odoo_network
+      - network  
     restart: always  
+
+
 
 volumes:
   odoo-db-data:
   odoo-web-data:
+    driver: local
 
 networks:
-  odoo_network:
-    driver: bridge
+  my_network:
+    driver: bridge  
