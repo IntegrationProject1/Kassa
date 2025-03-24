@@ -16,14 +16,14 @@ jobs:
 
       - name: Load environment variables from .env
         run: |
-          export $(grep -v '^#' .env | xargs)  # Laad .env bestand lokaal
+          export $(grep -v '^#' /home/ehbstudent/.env | xargs)
 
       - name: Build Docker Image
-        run: docker compose build
+        run: docker compose --env-file /home/ehbstudent/.env build
 
       - name: Test Docker Compose
         run: |
-          docker compose --env-file ~/.env up -d
+          docker compose --env-file /home/ehbstudent/.env up -d
           sleep 10
           docker ps
           docker inspect --format='{{json .State.Health}}' $(docker ps -q) | jq
@@ -40,5 +40,5 @@ jobs:
           cd ~/kassa
           git pull origin Deployment
           docker compose down
-          docker compose --env-file ../.env up -d
+          docker compose --env-file /home/ehbstudent/.env up -d
           docker system prune -af
