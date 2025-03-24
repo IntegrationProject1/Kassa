@@ -23,7 +23,7 @@ jobs:
 
       - name: Test Docker Compose
         run: |
-          docker compose up -d
+          docker compose --env-file ~/.env up -d
           sleep 10
           docker ps
           docker inspect --format='{{json .State.Health}}' $(docker ps -q) | jq
@@ -40,5 +40,5 @@ jobs:
           cd ~/kassa
           git pull origin Deployment
           docker compose down
-          docker compose up -d --build
+          docker compose --env-file ../.env up -d
           docker system prune -af
