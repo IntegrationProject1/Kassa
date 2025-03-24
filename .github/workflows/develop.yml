@@ -8,22 +8,25 @@ on:
 jobs:
   build:
     name: Build & Test Odoo
-    runs-on: ubuntu-latest
+    runs-on: self-hosted 
+    defaults:
+      run:
+        working-directory: /home/ehbstudent/kassa  
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set Up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Load environment variables from .env
+        run: export $(grep -v '^#' /home/ehbstudent/.env | xargs)
 
       - name: Build Docker Image
-        run: docker compose build
+        run: docker compose --env-file /home/ehbstudent/.env build
 
       - name: Test Docker Compose
         run: |
-          docker compose up -d
-          sleep 10  # Wacht tot services opstarten
-          docker ps  # Controleer draaiende containers
+          docker compose --env-file /home/ehbstudent/.env up -d
+          sleep 10
+          docker ps
           docker inspect --format='{{json .State.Health}}' $(docker ps -q) | jq
-          docker compose down  # Stop containers na test
+          docker compose down
