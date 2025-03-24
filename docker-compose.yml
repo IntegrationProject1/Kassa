@@ -10,7 +10,7 @@ services:
     ports:
       - "30060:5432"
     networks:
-      - network  
+      - project_network  
     restart: always 
 
   odoo:
@@ -34,10 +34,8 @@ services:
       - USER=${ODOO_USER}
       - PASSWORD=${ODOO_PASSWORD}
     networks:
-      - network  
+      - project_network  
     restart: always  
-
-
 
 volumes:
   odoo-db-data:
@@ -45,5 +43,5 @@ volumes:
     driver: local
 
 networks:
-  network:
-    driver: bridge  
+  project_network:
+    driver: bridge
