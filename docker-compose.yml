@@ -17,6 +17,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    env_file:
+      - .env
     user: root
     depends_on:
       - db
@@ -47,5 +49,5 @@ volumes:
     driver: local
 
 networks:
-  my_network:
+  network:
     driver: bridge  
