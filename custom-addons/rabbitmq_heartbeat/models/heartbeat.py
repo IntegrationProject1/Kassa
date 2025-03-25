@@ -2,8 +2,10 @@ import pika
 import threading
 import time
 import datetime
+import socket
 import xml.etree.ElementTree as ET
 from odoo import models, api
+from odoo.service import common
 
 RABBITMQ_HOST = "rabbitmq"
 QUEUE_NAME = "heartbeat"
@@ -34,21 +36,52 @@ class HeartbeatThread(threading.Thread):
             time.sleep(HEARTBEAT_INTERVAL)
 
         connection.close()
-
-    def create_heartbeat_message(self):
-        """Genereert een XML heartbeat bericht."""
-        root = ET.Element("heartbeat")
-        timestamp = ET.SubElement(root, "timestamp")
-        timestamp.text = datetime.datetime.utcnow().isoformat()
-
-        status = ET.SubElement(root, "status")
-        status.text = "running"
-
-        return ET.tostring(root, encoding="utf-8", method="xml").decode()
-
+        
+    
     def stop(self):
         """Stop de thread netjes."""
         self.running = False
+        
+        
+    def create_heartbeat_message(self):
+        """Genereert een XML heartbeat bericht in het gewenste formaat."""
+        # Create the root element
+        root = ET.Element("Heartbeat")
+    
+        # Add ServiceName element
+        service_name = ET.SubElement(root, "ServiceName")
+        service_name.text = "Odoo_POS" 
+    
+        # Add Status element
+        status = ET.SubElement(root, "Status")
+        status.text = "OK"
+        
+        # Add Timestamp element -> ISO format
+        timestamp = ET.SubElement(root, "Timestamp")
+        timestamp.text = datetime.datetime.utcnow().isoformat() + "Z"  # Adding Z for UTC timezone
+        
+        # Add HeartBeatInterval element
+        interval = ET.SubElement(root, "HeartBeatInterval")
+        interval.text = str(HEARTBEAT_INTERVAL)
+        
+        # Add Metadata section
+        metadata = ET.SubElement(root, "Metadata")
+        
+        # Add Version in Metadata
+        version = ET.SubElement(metadata, "Version")
+        version.text = "1.0.0"  #whats the actual verion idk
+        
+        # Add Host in Metadata
+        host = ET.SubElement(metadata, "Host")
+        host.text = socket.gethostname() 
+        
+        # Add Environment in Metadata
+        environment = ET.SubElement(metadata, "Environment")
+        environment.text = "production" 
+        
+        # Convert to str and return
+        return ET.tostring(root, encoding="utf-8", method="xml").decode()    
+
 
 heartbeat_thread = HeartbeatThread()
 
@@ -65,11 +98,6 @@ class RabbitMQHeartbeat(models.AbstractModel):
             heartbeat_thread = HeartbeatThread()
             heartbeat_thread.start()
 
-
-
-from odoo import api, models
-from odoo.service import common
-
 class RabbitMQHeartbeatStartup(models.AbstractModel):
     _name = "rabbitmq.heartbeat.startup"
     _description = "Start RabbitMQ Heartbeat bij Odoo opstart"
@@ -78,6 +106,3 @@ class RabbitMQHeartbeatStartup(models.AbstractModel):
     def _register_hook(self):
         """Start de heartbeat-thread bij Odoo startup."""
         self.env['rabbitmq.heartbeat'].start_heartbeat()
-
-
-        ##dit is een test3
