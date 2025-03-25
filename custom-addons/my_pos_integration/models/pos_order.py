@@ -20,7 +20,7 @@ class PosOrder(models.Model):
         return ET.tostring(root, encoding='unicode')
 
     def send_to_rabbitmq(self, message):
-        connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+        connection = pika.BlockingConnection(pika.ConnectionParameters('rabbitmq'))
         channel = connection.channel()
         channel.queue_declare(queue='orders', durable=True)
         channel.basic_publish(exchange='', routing_key='orders', body=message)

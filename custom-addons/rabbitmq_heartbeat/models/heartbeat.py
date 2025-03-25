@@ -20,7 +20,11 @@ class HeartbeatThread(threading.Thread):
 
     def run(self):
         """Verstuurt elke seconde een heartbeat naar RabbitMQ."""
-        connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST))
+        credentials = pika.PlainCredentials('guest', 'guest') # Default credentials
+        connection = pika.BlockingConnection(pika.ConnectionParameters(
+            host=RABBITMQ_HOST,
+            credentials=credentials
+        ))
         channel = connection.channel()
         channel.queue_declare(queue=QUEUE_NAME, durable=True)
 
