@@ -13,6 +13,20 @@ services:
       - project_network  
     restart: always 
 
+    
+  rabbitmq:
+    image: rabbitmq:management
+    hostname: rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    ports:
+      - "5672:5672" 
+      - "15672:15672"
+    networks:
+      - project_network
+    restart: always  # Added for automatic restart
+
   odoo:
     build:
       context: .
@@ -22,6 +36,7 @@ services:
     user: root
     depends_on:
       - db
+      - rabbitmq
     ports:
       - "30069:8069"
     volumes:
@@ -33,6 +48,7 @@ services:
       - HOST=${ODOO_HOST}
       - USER=${ODOO_USER}
       - PASSWORD=${ODOO_PASSWORD}
+      - RABBITMQ_HOST=rabbitmq
     networks:
       - project_network  
     restart: always  
