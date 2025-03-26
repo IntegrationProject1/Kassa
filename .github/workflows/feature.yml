@@ -1,13 +1,12 @@
-name: Odoo CI/CD deploy Pipeline
+name: Odoo CI/CD feature Pipeline
 
 on:
   push:
-    branches:
-      - Deployment  
+    branches: [ Feature-Mathis, Feature-Daniel, Feature-Milan, Feature-Jorn, Feature-Jente ]  
 
 jobs:
   build:
-    name: Build & Test Odoo
+    name: Build Odoo
     runs-on: self-hosted 
     defaults:
       run:
@@ -30,20 +29,3 @@ jobs:
           docker ps
           docker inspect --format='{{json .State.Health}}' $(docker ps -q) | jq
           docker compose down
-
-  deploy:
-    name: Deploy to Server
-    needs: build
-    runs-on: self-hosted  
-    environment: environment
-    defaults:
-      run:
-        working-directory: /home/ehbstudent/kassa 
-
-    steps:
-      - name: Pull latest code and restart containers
-        run: |
-          git pull origin Deployment
-          docker compose down
-          docker compose --env-file /home/ehbstudent/.env up -d
-          docker system prune -af
