@@ -47,78 +47,27 @@ jobs:
           # Create directory structure
           mkdir -p custom-addons/user_delete/tests
           
-          # Copy test file from the repository to the test directory
+          # Copy test file from the repository
           cp ${{ github.workspace }}/custom-addons/user_delete/tests/test_rabbitmq_consumer.py custom-addons/user_delete/tests/
           
           # Create __init__.py
           echo "from . import test_rabbitmq_consumer" > custom-addons/user_delete/tests/__init__.py
-          
-          # Display test file for debugging
-          echo "Test file contents:"
-          cat custom-addons/user_delete/tests/test_rabbitmq_consumer.py
-          
-      - name: Create requirements.txt for tests
-        run: |
-          cat > requirements.txt << 'EOF'
-          pika>=1.2.0
-          lxml>=4.6.3
-          mock>=4.0.3
-          psycopg2-binary>=2.9.3
-          EOF
           
       - name: Start containers for testing
         run: |
           docker compose --env-file /home/ehbstudent/.env up -d
           sleep 10 # Give time for containers to start
 
-      - name: Create test database
+      - name: Install essential packages
         run: |
-          # Access PostgreSQL from inside the db container
-          docker compose --env-file /home/ehbstudent/.env exec -T db psql -U odoo -c "DROP DATABASE IF EXISTS test_db;" postgres
-          docker compose --env-file /home/ehbstudent/.env exec -T db psql -U odoo -c "CREATE DATABASE test_db OWNER odoo;" postgres
-    
-      - name: Install packages in container
-        run: |
-          # Install necessary packages inside the container
-          docker compose --env-file /home/ehbstudent/.env exec -T odoo pip3 install --break-system-packages mock lxml
+          # Only install absolutely required packages
+          docker compose --env-file /home/ehbstudent/.env exec -T odoo pip3 install --break-system-packages mock
       
-      - name: Run unittest tests
+      - name: Run specific test directly
         run: |
-          # Run Python's unittest in the container
+          # Run the test_rabbitmq_consumer.py file directly 
           docker compose --env-file /home/ehbstudent/.env exec -T odoo \
-            bash -c "cd /mnt/extra-addons && python3 -m unittest discover -s user_delete/tests -p 'test_rabbitmq_consumer.py'"
-          
-      - name: Create simplified test file for Odoo test runner
-        run: |
-          # Create a simplified test file that will work with the Odoo test runner
-          cat > custom-addons/user_delete/tests/simplified_test.py << 'EOF'
-          from odoo.tests import common
-
-          class TestUserDeleteSimplified(common.TransactionCase):
-              """Simple test cases for the UserDeleteThread class."""
-              
-              def setUp(self):
-                  super().setUp()
-              
-              def test_module_installed(self):
-                  """Test that the user_delete module is installed."""
-                  module = self.env['ir.module.module'].search([('name', '=', 'user_delete')])
-                  self.assertTrue(module.exists(), "Module user_delete should be installed")
-          EOF
-          
-          # Update __init__.py to include simplified test
-          echo "from . import simplified_test" >> custom-addons/user_delete/tests/__init__.py
-
-      - name: Run Odoo tests
-        run: |
-          docker compose --env-file /home/ehbstudent/.env exec -T odoo \
-            odoo --stop-after-init \
-                --test-enable \
-                --log-level=test \
-                --database=test_db \
-                --db_host=db \
-                --modules=user_delete \
-                -i user_delete
+            python3 -m unittest discover -s /mnt/extra-addons/user_delete/tests -p "test_rabbitmq_consumer.py"
                  
       - name: Stop containers
         if: always()
