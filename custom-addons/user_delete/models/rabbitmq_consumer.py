@@ -5,6 +5,7 @@ import datetime
 import xml.etree.ElementTree as ET
 import logging
 import traceback
+import os
 from odoo import models, api, fields, _
 from odoo.exceptions import UserError
 from lxml import etree
@@ -12,12 +13,12 @@ from io import StringIO
 
 _logger = logging.getLogger(__name__)
 
-# Constanten
-RABBITMQ_HOST = "localhost"
-RABBITMQ_PORT = 30020
-RABBITMQ_USER = "ehbstudent"
-RABBITMQ_PASSWORD = "wpqjf9mI3DKZdZDaa!"
-QUEUE_NAME = "kassa_user_delete"
+# Constants with environment variable fallbacks
+RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST')
+RABBITMQ_PORT = int(os.environ.get('RABBITMQ_PORT')) 
+RABBITMQ_USER = os.environ.get('RABBITMQ_USER')
+RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
+QUEUE_NAME = os.environ.get('RABBITMQ_QUEUE')
 
 # Add XSD schema as a constant
 XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
