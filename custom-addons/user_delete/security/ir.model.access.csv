@@ -1,0 +1,3 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_rabbitmq_user_delete,access.rabbitmq.user.delete,model_rabbitmq_user_delete,base.group_system,1,1,1,1
+access_rabbitmq_user_delete_startup,access.rabbitmq.user.delete.startup,model_rabbitmq_user_delete_startup,base.group_system,1,1,1,1
