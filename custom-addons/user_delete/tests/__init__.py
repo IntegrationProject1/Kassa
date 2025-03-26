@@ -1,1 +1,0 @@
-from . import test_rabbitmq_consumer
