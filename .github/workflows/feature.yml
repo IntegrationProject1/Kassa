@@ -6,12 +6,11 @@ on:
 
 jobs:
   build:
-    name: Build Odoo
-    runs-on: self-hosted 
+    name: Build & Test Odoo
+    runs-on: self-hosted
     defaults:
       run:
-        working-directory: /home/ehbstudent/kassa  
-
+        working-directory: /home/ehbstudent/kassa
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -31,44 +30,27 @@ jobs:
           docker compose down
 
   test:
-    name: Test Odoo
+    name: Run User Delete Tests
     needs: build
     runs-on: self-hosted
     defaults:
       run:
         working-directory: /home/ehbstudent/kassa
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-    
-      - name: Set up test directory structure
-        run: |
-          # Create directory structure
-          mkdir -p custom-addons/user_delete/tests
-          
-          # Copy test file from the repository
-          cp ${{ github.workspace }}/custom-addons/user_delete/tests/test_rabbitmq_consumer.py custom-addons/user_delete/tests/
-          
-          # Create __init__.py
-          echo "from . import test_rabbitmq_consumer" > custom-addons/user_delete/tests/__init__.py
-          
+
       - name: Start containers for testing
         run: |
           docker compose --env-file /home/ehbstudent/.env up -d
-          sleep 10 # Give time for containers to start
+          sleep 10  # geef containers tijd om op te starten
 
-      - name: Install essential packages
+      - name: Run RabbitMQ Consumer Tests
         run: |
-          # Only install absolutely required packages
-          docker compose --env-file /home/ehbstudent/.env exec -T odoo pip3 install --break-system-packages mock
-      
-      - name: Run specific test directly
-        run: |
-          # Run the test_rabbitmq_consumer.py file directly 
           docker compose --env-file /home/ehbstudent/.env exec -T odoo \
             python3 -m unittest discover -s /mnt/extra-addons/user_delete/tests -p "test_rabbitmq_consumer.py"
-                 
+      
       - name: Stop containers
         if: always()
         run: docker compose --env-file /home/ehbstudent/.env down
+
