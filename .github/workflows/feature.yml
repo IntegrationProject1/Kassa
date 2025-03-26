@@ -42,10 +42,20 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
     
-      - name: Create tests directory structure
+      - name: Set up test directory structure
         run: |
+          # Create directory structure
           mkdir -p custom-addons/user_delete/tests
+          
+          # Copy test file from the repository to the test directory
+          cp ${{ github.workspace }}/custom-addons/user_delete/tests/test_rabbitmq_consumer.py custom-addons/user_delete/tests/
+          
+          # Create __init__.py
           echo "from . import test_rabbitmq_consumer" > custom-addons/user_delete/tests/__init__.py
+          
+          # Display test file for debugging
+          echo "Test file contents:"
+          cat custom-addons/user_delete/tests/test_rabbitmq_consumer.py
           
       - name: Start containers for testing
         run: |
@@ -58,15 +68,27 @@ jobs:
           docker compose --env-file /home/ehbstudent/.env exec -T db psql -U odoo -c "DROP DATABASE IF EXISTS test_db;" postgres
           docker compose --env-file /home/ehbstudent/.env exec -T db psql -U odoo -c "CREATE DATABASE test_db OWNER odoo;" postgres
     
-      - name: Run unit tests in Docker container
+      - name: Install required packages in odoo container
+        run: |
+          docker compose --env-file /home/ehbstudent/.env exec -T odoo pip3 install lxml mock
+
+      - name: Run tests using unittest directly
+        run: |
+          docker compose --env-file /home/ehbstudent/.env exec -T odoo \
+            python3 -m unittest discover -s /mnt/extra-addons/user_delete/tests
+      
+      - name: Run Odoo tests with proper initialization
         run: |
           docker compose --env-file /home/ehbstudent/.env exec -T odoo \
             odoo --stop-after-init \
-                 --test-enable \
-                 --log-level=test \
-                 --database=test_db \
-                 --db_host=db \
-                 --init=user_delete
+                --test-enable \
+                --log-level=test \
+                --database=test_db \
+                --db_host=db \
+                --without-demo=WITHOUT_DEMO \
+                --modules=user_delete \
+                -i user_delete \
+                -c /etc/odoo/odoo.conf
                  
       - name: Stop containers
         if: always()
