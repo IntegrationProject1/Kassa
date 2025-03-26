@@ -18,9 +18,28 @@ HEARTBEAT_INTERVAL = float(os.environ.get('HEARTBEAT_INTERVAL', '0.5'))
 SERVICE_NAME = os.environ.get('SERVICE_NAME', 'Odoo_POS')
 ENVIRONMENT = os.environ.get('ODOO_ENVIRONMENT', 'production')
 
+# Global lock for thread safety
+_thread_lock = threading.Lock()
+
 class HeartbeatThread(threading.Thread):
-    """Thread that sends a heartbeat to RabbitMQ at specified intervals."""
+    """
+    Thread that sends a heartbeat to RabbitMQ at specified intervals.
+    Implements Singleton pattern to ensure only one instance exists.
+    """
+    _instance = None
+    _initialized = False
+    
+    def __new__(cls, *args, **kwargs):
+        with _thread_lock:
+            if cls._instance is None:
+                cls._instance = super(HeartbeatThread, cls).__new__(cls)
+            return cls._instance
+            
     def __init__(self, service_name=None, interval=None):
+        # Only initialize once (singleton pattern)
+        if self.__class__._initialized:
+            return
+            
         super().__init__()
         self.daemon = True  # Ensures thread stops when Odoo stops
         self.running = True
@@ -28,14 +47,21 @@ class HeartbeatThread(threading.Thread):
         self.interval = interval or HEARTBEAT_INTERVAL
         self.connection = None
         self.channel = None
+        self.instance_id = id(self)  # Store a unique ID for debugging
+        
+        # Mark as initialized
+        self.__class__._initialized = True
+        _logger.info(f"HeartbeatThread instance created with ID: {self.instance_id}")
 
     def run(self):
         """Sends heartbeat to RabbitMQ at regular intervals."""
         try:
             self._setup_connection()
+            _logger.info(f"HeartbeatThread starting with ID: {self.instance_id}")
             
             while self.running:
                 try:
+                    current_time = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
                     heartbeat_msg = self.create_heartbeat_message()
                     self.channel.basic_publish(
                         exchange='',
@@ -43,7 +69,9 @@ class HeartbeatThread(threading.Thread):
                         body=heartbeat_msg,
                         properties=pika.BasicProperties(delivery_mode=2)  # Persistent messages
                     )
-                    _logger.debug(f"[HEARTBEAT] Sent heartbeat for {self.service_name}")
+                    # Include instance ID in logs
+                    print(f"[{current_time}] Heartbeat sent for {self.service_name} (ID: {self.instance_id})")
+                    _logger.info(f"[HEARTBEAT] Sent heartbeat for {self.service_name} at {current_time}")
                     time.sleep(self.interval)
                 except pika.exceptions.AMQPConnectionError:
                     _logger.warning("Lost connection to RabbitMQ. Attempting to reconnect...")
@@ -51,8 +79,23 @@ class HeartbeatThread(threading.Thread):
         except Exception as e:
             _logger.error(f"Heartbeat thread error: {e}")
         finally:
+            _logger.info(f"HeartbeatThread stopping with ID: {self.instance_id}")
             self._close_connection()
     
+    @classmethod
+    def reset(cls):
+        """Reset the singleton state (mainly for testing)."""
+        with _thread_lock:
+            if cls._instance is not None:
+                if cls._instance.is_alive():
+                    cls._instance.running = False
+                cls._instance = None
+                cls._initialized = False
+                _logger.info("HeartbeatThread singleton has been reset")
+                return True
+            return False
+    
+    # Rest of the methods remain the same...
     def _setup_connection(self):
         """Establishes connection to RabbitMQ."""
         credentials = pika.PlainCredentials('guest', 'guest')
@@ -115,12 +158,10 @@ class HeartbeatThread(threading.Thread):
         environment.text = ENVIRONMENT
         
         # Convert to str and return
-        return ET.tostring(root, encoding="utf-8", method="xml").decode()    
+        return ET.tostring(root, encoding="utf-8", method="xml").decode()
 
 
-# Global thread instance
-heartbeat_thread = None
-
+# We no longer need the global thread variable with the singleton pattern
 class RabbitMQHeartbeat(models.AbstractModel):
     _name = 'rabbitmq.heartbeat'
     _description = 'RabbitMQ Heartbeat Service'
@@ -133,28 +174,30 @@ class RabbitMQHeartbeat(models.AbstractModel):
     @api.model
     def start_heartbeat(self, service_name=None, interval=None):
         """Start the heartbeat thread if it's not already running."""
-        global heartbeat_thread
+        thread = HeartbeatThread(service_name=service_name, interval=interval)
         
-        # Use provided params or fall back to environment variables
-        service_name = service_name or SERVICE_NAME
-        interval = interval or HEARTBEAT_INTERVAL
-        
-        if not heartbeat_thread or not heartbeat_thread.is_alive():
-            _logger.info(f"Starting heartbeat service for {service_name} every {interval} seconds...")
-            heartbeat_thread = HeartbeatThread(service_name=service_name, interval=interval)
-            heartbeat_thread.start()
-            return True
-        return False
+        # Check if the thread is already running
+        if thread.is_alive():
+            _logger.info(f"Heartbeat thread (ID: {thread.instance_id}) is already running")
+            return False
+            
+        _logger.info(f"Starting heartbeat service for {thread.service_name} every {thread.interval} seconds...")
+        thread.start()
+        return True
 
     @api.model
     def stop_heartbeat(self):
         """Stop the heartbeat thread."""
-        global heartbeat_thread
-        if heartbeat_thread and heartbeat_thread.is_alive():
-            _logger.info("Stopping heartbeat service...")
-            heartbeat_thread.stop()
+        if HeartbeatThread._instance and HeartbeatThread._instance.is_alive():
+            _logger.info(f"Stopping heartbeat service (ID: {HeartbeatThread._instance.instance_id})...")
+            HeartbeatThread._instance.stop()
             return True
         return False
+        
+    @api.model
+    def reset_heartbeat(self):
+        """Reset the heartbeat singleton (for testing/debugging)."""
+        return HeartbeatThread.reset()
 
 class RabbitMQHeartbeatStartup(models.AbstractModel):
     _name = "rabbitmq.heartbeat.startup"
@@ -163,4 +206,6 @@ class RabbitMQHeartbeatStartup(models.AbstractModel):
     @api.model
     def _register_hook(self):
         """Start the heartbeat thread at Odoo startup."""
+        # Add a small delay to prevent double initialization during module loading
+        self._cr.execute("SELECT pg_sleep(1)")
         self.env['rabbitmq.heartbeat'].start_heartbeat()
