@@ -48,6 +48,7 @@ jobs:
       - name: Run RabbitMQ Consumer Tests
         run: |
           docker compose --env-file /home/ehbstudent/.env exec -T odoo bash -c "\
+            export PYTHONPATH=/mnt/extra-addons && \
             mkdir -p /mnt/extra-addons/odoo/addons && \
             ln -sf /mnt/extra-addons/user_delete /mnt/extra-addons/odoo/addons/user_delete && \
             python3 -m unittest discover -s /mnt/extra-addons/odoo/addons/user_delete/tests -p 'test_rabbitmq_consumer.py'"
