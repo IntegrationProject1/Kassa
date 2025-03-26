@@ -18,28 +18,15 @@ HEARTBEAT_INTERVAL = float(os.environ.get('HEARTBEAT_INTERVAL', '0.5'))
 SERVICE_NAME = os.environ.get('SERVICE_NAME', 'Odoo_POS')
 ENVIRONMENT = os.environ.get('ODOO_ENVIRONMENT', 'production')
 
-# Global lock for thread safety
+# Module-level variables for true singleton implementation
 _thread_lock = threading.Lock()
+_heartbeat_thread_instance = None
+_is_thread_running = False
 
 class HeartbeatThread(threading.Thread):
-    """
-    Thread that sends a heartbeat to RabbitMQ at specified intervals.
-    Implements Singleton pattern to ensure only one instance exists.
-    """
-    _instance = None
-    _initialized = False
+    """Thread that sends a heartbeat to RabbitMQ at specified intervals."""
     
-    def __new__(cls, *args, **kwargs):
-        with _thread_lock:
-            if cls._instance is None:
-                cls._instance = super(HeartbeatThread, cls).__new__(cls)
-            return cls._instance
-            
     def __init__(self, service_name=None, interval=None):
-        # Only initialize once (singleton pattern)
-        if self.__class__._initialized:
-            return
-            
         super().__init__()
         self.daemon = True  # Ensures thread stops when Odoo stops
         self.running = True
@@ -48,16 +35,16 @@ class HeartbeatThread(threading.Thread):
         self.connection = None
         self.channel = None
         self.instance_id = id(self)  # Store a unique ID for debugging
-        
-        # Mark as initialized
-        self.__class__._initialized = True
         _logger.info(f"HeartbeatThread instance created with ID: {self.instance_id}")
 
     def run(self):
         """Sends heartbeat to RabbitMQ at regular intervals."""
+        global _is_thread_running
+        
         try:
             self._setup_connection()
             _logger.info(f"HeartbeatThread starting with ID: {self.instance_id}")
+            _is_thread_running = True
             
             while self.running:
                 try:
@@ -79,21 +66,13 @@ class HeartbeatThread(threading.Thread):
         except Exception as e:
             _logger.error(f"Heartbeat thread error: {e}")
         finally:
+            with _thread_lock:
+                _is_thread_running = False
+                global _heartbeat_thread_instance
+                if _heartbeat_thread_instance == self:
+                    _heartbeat_thread_instance = None
             _logger.info(f"HeartbeatThread stopping with ID: {self.instance_id}")
             self._close_connection()
-    
-    @classmethod
-    def reset(cls):
-        """Reset the singleton state (mainly for testing)."""
-        with _thread_lock:
-            if cls._instance is not None:
-                if cls._instance.is_alive():
-                    cls._instance.running = False
-                cls._instance = None
-                cls._initialized = False
-                _logger.info("HeartbeatThread singleton has been reset")
-                return True
-            return False
     
     # Rest of the methods remain the same...
     def _setup_connection(self):
@@ -161,7 +140,6 @@ class HeartbeatThread(threading.Thread):
         return ET.tostring(root, encoding="utf-8", method="xml").decode()
 
 
-# We no longer need the global thread variable with the singleton pattern
 class RabbitMQHeartbeat(models.AbstractModel):
     _name = 'rabbitmq.heartbeat'
     _description = 'RabbitMQ Heartbeat Service'
@@ -174,30 +152,49 @@ class RabbitMQHeartbeat(models.AbstractModel):
     @api.model
     def start_heartbeat(self, service_name=None, interval=None):
         """Start the heartbeat thread if it's not already running."""
-        thread = HeartbeatThread(service_name=service_name, interval=interval)
+        global _thread_lock, _heartbeat_thread_instance, _is_thread_running
         
-        # Check if the thread is already running
-        if thread.is_alive():
-            _logger.info(f"Heartbeat thread (ID: {thread.instance_id}) is already running")
-            return False
-            
-        _logger.info(f"Starting heartbeat service for {thread.service_name} every {thread.interval} seconds...")
-        thread.start()
-        return True
+        with _thread_lock:
+            # Check if the thread is already running
+            if _is_thread_running:
+                _logger.info(f"Heartbeat thread is already running, not starting a new one")
+                return False
+                
+            # Create a new thread instance if needed
+            if not _heartbeat_thread_instance:
+                _heartbeat_thread_instance = HeartbeatThread(service_name=service_name, interval=interval)
+                
+            # Log and start the thread
+            _logger.info(f"Starting heartbeat service for {_heartbeat_thread_instance.service_name} every {_heartbeat_thread_instance.interval} seconds...")
+            _heartbeat_thread_instance.start()
+            return True
 
     @api.model
     def stop_heartbeat(self):
         """Stop the heartbeat thread."""
-        if HeartbeatThread._instance and HeartbeatThread._instance.is_alive():
-            _logger.info(f"Stopping heartbeat service (ID: {HeartbeatThread._instance.instance_id})...")
-            HeartbeatThread._instance.stop()
-            return True
-        return False
+        global _thread_lock, _heartbeat_thread_instance
+        
+        with _thread_lock:
+            if _heartbeat_thread_instance and _heartbeat_thread_instance.is_alive():
+                _logger.info(f"Stopping heartbeat service (ID: {_heartbeat_thread_instance.instance_id})...")
+                _heartbeat_thread_instance.stop()
+                return True
+            return False
         
     @api.model
     def reset_heartbeat(self):
-        """Reset the heartbeat singleton (for testing/debugging)."""
-        return HeartbeatThread.reset()
+        """Reset the heartbeat state (for testing/debugging)."""
+        global _thread_lock, _heartbeat_thread_instance, _is_thread_running
+        
+        with _thread_lock:
+            if _heartbeat_thread_instance:
+                if _heartbeat_thread_instance.is_alive():
+                    _heartbeat_thread_instance.stop()
+                _heartbeat_thread_instance = None
+                _is_thread_running = False
+                _logger.info("Heartbeat thread has been reset")
+                return True
+            return False
 
 class RabbitMQHeartbeatStartup(models.AbstractModel):
     _name = "rabbitmq.heartbeat.startup"
@@ -206,6 +203,6 @@ class RabbitMQHeartbeatStartup(models.AbstractModel):
     @api.model
     def _register_hook(self):
         """Start the heartbeat thread at Odoo startup."""
-        # Add a small delay to prevent double initialization during module loading
-        self._cr.execute("SELECT pg_sleep(1)")
+        # Add a small delay to prevent module reload issues
+        self._cr.execute("SELECT pg_sleep(2)")
         self.env['rabbitmq.heartbeat'].start_heartbeat()
