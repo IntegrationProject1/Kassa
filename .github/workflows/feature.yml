@@ -46,21 +46,28 @@ jobs:
         run: |
           mkdir -p custom-addons/user_delete/tests
           echo "from . import test_rabbitmq_consumer" > custom-addons/user_delete/tests/__init__.py
+          
+      - name: Start containers for testing
+        run: |
+          docker compose --env-file /home/ehbstudent/.env up -d
+          sleep 10 # Give time for containers to start
 
       - name: Create test database
         run: |
-          docker compose --env-file /home/ehbstudent/.env run --rm db psql -U odoo -c "DROP DATABASE IF EXISTS test_db;" postgres
-          docker compose --env-file /home/ehbstudent/.env run --rm db psql -U odoo -c "CREATE DATABASE test_db OWNER odoo;" postgres
+          # Access PostgreSQL from inside the db container
+          docker compose --env-file /home/ehbstudent/.env exec -T db psql -U odoo -c "DROP DATABASE IF EXISTS test_db;" postgres
+          docker compose --env-file /home/ehbstudent/.env exec -T db psql -U odoo -c "CREATE DATABASE test_db OWNER odoo;" postgres
     
       - name: Run unit tests in Docker container
         run: |
-          docker compose --env-file /home/ehbstudent/.env run --rm \
-            -e TEST_ENABLE=True \
-            odoo \
+          docker compose --env-file /home/ehbstudent/.env exec -T odoo \
             odoo --stop-after-init \
                  --test-enable \
                  --log-level=test \
                  --database=test_db \
                  --db_host=db \
-                 --init=user_delete \
-                 --test-tags=user_delete
+                 --init=user_delete
+                 
+      - name: Stop containers
+        if: always()
+        run: docker compose --env-file /home/ehbstudent/.env down
