@@ -1,0 +1,56 @@
+name: Odoo CI/CD develop Pipeline
+
+on:
+  push:
+    branches: [ Feature-Mathis, Feature-Daniel, Feature-Milan, Feature-Jorn, Feature-Jente ]  
+
+jobs:
+  build:
+    name: Build Odoo
+    runs-on: self-hosted 
+    defaults:
+      run:
+        working-directory: /home/ehbstudent/kassa  
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Load environment variables from .env
+        run: export $(grep -v '^#' /home/ehbstudent/.env | xargs)
+
+      - name: Build Docker Image
+        run: docker compose --env-file /home/ehbstudent/.env build
+
+      - name: Test Docker Compose
+        run: |
+          docker compose --env-file /home/ehbstudent/.env up -d
+          sleep 10
+          docker ps
+          docker inspect --format='{{json .State.Health}}' $(docker ps -q) | jq
+          docker compose down
+
+  test:
+    name: Test Odoo
+    runs-on: self-hosted
+    defaults:
+      run:
+        working-directory: /home/ehbstudent/kassa
+
+    steps:
+        - uses: actions/checkout@v2
+    
+        - name: Set up Python
+          uses: actions/setup-python@v2
+          with:
+            python-version: '3.10'
+        
+        - name: Install dependencies
+          run: |
+            python -m pip install --upgrade pip
+            pip install -r requirements.txt
+            pip install -r custom-addons/user_delete/tests/requirements.txt
+            
+        - name: Run unit tests
+          run: |
+            odoo -c odoo.conf --test-enable -d test_db -i user_delete --stop-after-init

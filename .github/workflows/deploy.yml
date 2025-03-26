@@ -35,6 +35,7 @@ jobs:
     name: Deploy to Server
     needs: build
     runs-on: self-hosted  
+    environment: environment
     defaults:
       run:
         working-directory: /home/ehbstudent/kassa 
