@@ -18,7 +18,7 @@ RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST')
 RABBITMQ_PORT = int(os.environ.get('RABBITMQ_PORT')) 
 RABBITMQ_USER = os.environ.get('RABBITMQ_USER')
 RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
-QUEUE_NAME = os.environ.get('RABBITMQ_QUEUE')
+QUEUE_NAME = os.environ.get('RABBITMQ_QUEUE', 'kassa_user_delete')
 
 # Add XSD schema as a constant
 XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
