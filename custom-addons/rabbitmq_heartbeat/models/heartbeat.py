@@ -14,7 +14,7 @@ _logger = logging.getLogger(__name__)
 # Configuration with environment variable fallbacks
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq')
 QUEUE_NAME = os.environ.get('RABBITMQ_QUEUE', 'heartbeat')
-HEARTBEAT_INTERVAL = int(os.environ.get('HEARTBEAT_INTERVAL', '0.5'))
+HEARTBEAT_INTERVAL = float(os.environ.get('HEARTBEAT_INTERVAL', '0.5'))
 SERVICE_NAME = os.environ.get('SERVICE_NAME', 'Odoo_POS')
 ENVIRONMENT = os.environ.get('ODOO_ENVIRONMENT', 'production')
 
