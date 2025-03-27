@@ -45,5 +45,5 @@ jobs:
         run: |
           git pull origin Deployment
           docker compose down
-          docker compose --env-file /home/ehbstudent/.env up -d
           docker system prune -af
+          docker compose --env-file /home/ehbstudent/.env up -d
