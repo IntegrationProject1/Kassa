@@ -352,58 +352,6 @@ class RabbitMQUserDelete(models.AbstractModel):
             user_delete_thread.stop()
             return True
         return False
-    
-    @api.model
-    def test_connection(self):
-        """Test de verbinding met RabbitMQ."""
-        try:
-            # Setup credentials
-            credentials = pika.PlainCredentials(
-                username=RABBITMQ_USER,
-                password=RABBITMQ_PASSWORD
-            )
-            
-            # Connect to RabbitMQ
-            connection = pika.BlockingConnection(
-                pika.ConnectionParameters(
-                    host=RABBITMQ_HOST,
-                    port=RABBITMQ_PORT,
-                    credentials=credentials
-                )
-            )
-            channel = connection.channel()
-            
-            # Check queue status
-            queue_info = channel.queue_declare(queue=SERVICE_QUEUES[0], durable=True)
-            message_count = queue_info.method.message_count
-            
-            # Close connection
-            connection.close()
-            
-            print(f"RabbitMQ connection test successful: queue has {message_count} messages")
-            return {
-                'type': 'ir.actions.client',
-                'tag': 'display_notification',
-                'params': {
-                    'title': _('Connection Successful'),
-                    'message': _('Successfully connected to RabbitMQ. Queue %s has %s messages.') % (SERVICE_QUEUES[0], message_count),
-                    'sticky': False,
-                    'type': 'success'
-                }
-            }
-        except Exception as e:
-            print(f"RabbitMQ connection test failed: {str(e)}")
-            print(traceback.format_exc())
-            return {
-                'type': 'ir.actions.client',
-                'tag': 'display_notification',
-                'params': {
-                    'title': _('Connection Failed'),
-                    'message': str(e),
-                    'sticky': False,
-                    'type': 'danger'
-                }
-            }
 
 class RabbitMQUserDeleteStartup(models.AbstractModel):
     _name = "rabbitmq.user.delete.startup"
