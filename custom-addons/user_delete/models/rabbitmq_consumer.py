@@ -18,7 +18,14 @@ RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST')
 RABBITMQ_PORT = int(os.environ.get('RABBITMQ_PORT')) 
 RABBITMQ_USER = os.environ.get('RABBITMQ_USER')
 RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
-QUEUE_NAME = os.environ.get('RABBITMQ_QUEUE', 'kassa_user_delete')
+
+# Definieer welke queues we willen consumeren
+SERVICE_QUEUES = [
+    'crm_user_delete',
+    'facturatie_user_delete',
+    'frontend_user_delete'
+    # kassa_user_delete is bewust uitgesloten
+]
 
 # Add XSD schema as a constant
 XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -49,13 +56,14 @@ class UserDeleteThread(threading.Thread):
         self.daemon = True  # Zorgt ervoor dat de thread stopt als Odoo stopt
         self.running = True
         self._cr = None
+        self.connections = {}  # Opslag voor verbindingen per queue
     
     def run(self):
-        """Luistert naar berichten van de kassa_user_delete queue."""
+        """Luistert naar berichten van de opgegeven service queues."""
         log_message(f"Starting UserDeleteThread connecting to {RABBITMQ_HOST}:{RABBITMQ_PORT}")
+        log_message(f"Will consume from {len(SERVICE_QUEUES)} queues: {', '.join(SERVICE_QUEUES)}")
         
         while self.running:
-            connection = None
             try:
                 # Setup credentials
                 credentials = pika.PlainCredentials(
@@ -63,7 +71,7 @@ class UserDeleteThread(threading.Thread):
                     password=RABBITMQ_PASSWORD
                 )
                 
-                # Connect to RabbitMQ
+                # Connect to RabbitMQ once
                 log_message(f"Connecting to RabbitMQ at {RABBITMQ_HOST}:{RABBITMQ_PORT}")
                 connection = pika.BlockingConnection(
                     pika.ConnectionParameters(
@@ -73,44 +81,69 @@ class UserDeleteThread(threading.Thread):
                         heartbeat=600
                     )
                 )
-                channel = connection.channel()
                 
-                # Declare the queue
-                channel.queue_declare(queue=QUEUE_NAME, durable=True)
+                # Maak een channel voor elke queue
+                channels = {}
+                consumers = {}
                 
-                # Get message count
-                queue_info = channel.queue_declare(queue=QUEUE_NAME, durable=True)
-                message_count = queue_info.method.message_count
-                log_message(f"Queue '{QUEUE_NAME}' has {message_count} messages waiting")
-                _logger.info(f"Queue '{QUEUE_NAME}' has {message_count} messages waiting")
-                
-                def callback(ch, method, properties, body):
+                for queue_name in SERVICE_QUEUES:
                     try:
-                        log_message(f"Received message: {body[:100]}...")  # Log first 100 chars
-                        _logger.info(f"Received message: {body[:100]}...")
-                        success = self._process_message(body)
+                        log_message(f"Setting up consumer for queue: {queue_name}")
                         
-                        if success:
-                            ch.basic_ack(delivery_tag=method.delivery_tag)
-                            log_message("Message processing successful and acknowledged")
-                        else:
-                            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-                            log_message("Message processing failed, rejecting message")
-                    except Exception as e:
-                        log_message(f"Error processing message: {str(e)}")
-                        log_message(traceback.format_exc())
-                        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                        # Nieuwe channel voor elke queue
+                        channels[queue_name] = connection.channel()
+                        channel = channels[queue_name]
+                        
+                        # Declare de queue
+                        channel.queue_declare(queue=queue_name, durable=True)
+                        
+                        # Controleer wachtende berichten
+                        queue_info = channel.queue_declare(queue=queue_name, durable=True)
+                        message_count = queue_info.method.message_count
+                        log_message(f"Queue '{queue_name}' has {message_count} messages waiting")
+                        
+                        # Definieer callback specifiek voor deze queue
+                        def make_callback(queue):
+                            def callback(ch, method, properties, body):
+                                try:
+                                    log_message(f"Received message from {queue}: {body[:100]}...")
+                                    success = self._process_message(body, queue)
+                                    
+                                    if success:
+                                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                                        log_message(f"Message from {queue} processed successfully")
+                                    else:
+                                        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                                        log_message(f"Message from {queue} processing failed")
+                                except Exception as e:
+                                    log_message(f"Error processing message from {queue}: {str(e)}")
+                                    log_message(traceback.format_exc())
+                                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                            return callback
+                        
+                        # Stel de consumer in voor deze queue
+                        channel.basic_qos(prefetch_count=1)
+                        consumer_tag = channel.basic_consume(
+                            queue=queue_name, 
+                            on_message_callback=make_callback(queue_name)
+                        )
+                        consumers[queue_name] = consumer_tag
+                        
+                        log_message(f"Now consuming from queue: {queue_name}")
+                        
+                    except Exception as queue_error:
+                        log_message(f"Error setting up consumer for queue {queue_name}: {str(queue_error)}")
                 
-                # Set up consumer
-                channel.basic_qos(prefetch_count=1)
-                channel.basic_consume(queue=QUEUE_NAME, on_message_callback=callback)
-                
-                log_message(f"Now consuming from queue: {QUEUE_NAME}")
-                
-                # Process messages but check periodically if we should stop
-                while self.running:
-                    connection.process_data_events(time_limit=1)
-                    time.sleep(0.1)
+                # Process data events voor alle channels
+                while self.running and connection.is_open:
+                    try:
+                        # Process events voor alle open channels
+                        connection.process_data_events(time_limit=1)
+                        time.sleep(0.1)
+                    except Exception as process_error:
+                        log_message(f"Error processing events: {str(process_error)}")
+                        if not connection.is_open:
+                            break
                 
             except Exception as e:
                 log_message(f"RabbitMQ connection error: {str(e)}")
@@ -118,7 +151,8 @@ class UserDeleteThread(threading.Thread):
                 # Wait before retrying
                 time.sleep(10)
             finally:
-                if connection and connection.is_open:
+                # Sluit de verbinding als deze nog open is
+                if 'connection' in locals() and connection and connection.is_open:
                     try:
                         connection.close()
                         log_message("RabbitMQ connection closed")
@@ -127,9 +161,13 @@ class UserDeleteThread(threading.Thread):
         
         log_message("UserDeleteThread stopped")
     
-    def _process_message(self, body):
+    def _process_message(self, body, queue_name=None):
         """Verwerk een XML bericht om een gebruiker te verwijderen."""
         try:
+            # Log waar het bericht vandaan kwam
+            source_info = f" from queue {queue_name}" if queue_name else ""
+            log_message(f"Processing message{source_info}")
+            
             # Parse the XML message
             message_str = body.decode('utf-8')
             log_message(f"Processing XML message: {message_str}")
@@ -336,7 +374,7 @@ class RabbitMQUserDelete(models.AbstractModel):
             channel = connection.channel()
             
             # Check queue status
-            queue_info = channel.queue_declare(queue=QUEUE_NAME, durable=True)
+            queue_info = channel.queue_declare(queue=SERVICE_QUEUES[0], durable=True)
             message_count = queue_info.method.message_count
             
             # Close connection
@@ -348,7 +386,7 @@ class RabbitMQUserDelete(models.AbstractModel):
                 'tag': 'display_notification',
                 'params': {
                     'title': _('Connection Successful'),
-                    'message': _('Successfully connected to RabbitMQ. Queue %s has %s messages.') % (QUEUE_NAME, message_count),
+                    'message': _('Successfully connected to RabbitMQ. Queue %s has %s messages.') % (SERVICE_QUEUES[0], message_count),
                     'sticky': False,
                     'type': 'success'
                 }
