@@ -10,7 +10,7 @@ class ResPartner(models.Model):
     @api.model
     def createQueue(self):
         """Ensure the RabbitMQ queue exists, and create it if it doesn't."""
-        queue_name = 'user_create'
+        queue_name = 'kassa_user_create'
         try:
             # Get RabbitMQ credentials from the environment variables
             rabbitmq_host = os.getenv('RABBITMQ_HOST')
@@ -44,7 +44,7 @@ class ResPartner(models.Model):
         partner = super(ResPartner, self).create(vals)
 
         # Define the queue name
-        queue_name = 'user_create'
+        queue_name = 'kassa_user_create'
 
         try:
             # Get RabbitMQ credentials from the environment variables
