@@ -2,17 +2,32 @@ import pika
 import xml.etree.ElementTree as ET
 from odoo import models, api
 import logging
+import os
 
 _logger = logging.getLogger(__name__)
 
-RABBITMQ_HOST = "rabbitmq"
+RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq')
+RABBITMQ_PORT = int(os.environ.get('RABBITMQ_PORT', 5672))
+RABBITMQ_USER = os.environ.get('RABBITMQ_USER')
+RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
+
+
+
 QUEUE_CREATED = "order.created"
 QUEUE_REFUNDED = "order.refunded"
 
 class PosOrder(models.Model):
     _inherit = 'pos.order'
 
-    @api.model
+    def _get_rabbitmq_connection_params(self):
+        """Get RabbitMQ connection parameters from environment variables"""
+        credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD)
+        return pika.ConnectionParameters(
+            host=RABBITMQ_HOST,
+            port=RABBITMQ_PORT,
+            credentials=credentials
+        )
+
     def create(self, vals):
         """Aangemaakte POS-order versturen naar RabbitMQ."""
         order = super(PosOrder, self).create(vals)
@@ -69,24 +84,27 @@ class PosOrder(models.Model):
     def send_to_rabbitmq(self, message, queue_name):
         """Verstuurt een bericht naar RabbitMQ en probeert opnieuw bij een fout."""
         try:
-            _logger.info(f"Verbinding maken met RabbitMQ op {RABBITMQ_HOST}...")
-            connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST))
+            _logger.info(f"Connecting to RabbitMQ at {RABBITMQ_HOST}:{RABBITMQ_PORT}...")
+            connection = pika.BlockingConnection(self._get_rabbitmq_connection_params())
             channel = connection.channel()
 
-            _logger.info(f"Declareren van de RabbitMQ queue: {queue_name}...")
+            _logger.info(f"Declaring RabbitMQ queue: {queue_name}...")
             channel.queue_declare(queue=queue_name, durable=True)
             channel.exchange_declare(exchange="billing", exchange_type="topic", durable=True)
             channel.queue_bind(exchange="billing", queue=queue_name, routing_key=queue_name)
 
-            _logger.info(f"Verzenden van bericht naar de queue {queue_name}...")
+            _logger.info(f"Publishing message to queue {queue_name}...")
             channel.basic_publish(
                 exchange='billing',
                 routing_key=queue_name,
                 body=message,
-                properties=pika.BasicProperties(delivery_mode=2)
+                properties=pika.BasicProperties(delivery_mode=2)  # Make message persistent
             )
 
-            _logger.info(f" [x] Order {message} verzonden naar RabbitMQ.")
+            _logger.info(f" [x] Order {message} sent to RabbitMQ.")
             connection.close()
+        except pika.exceptions.AMQPConnectionError as e:
+            _logger.error(f" [ERROR] RabbitMQ connection error: {e}")
         except Exception as e:
-            _logger.error(f" [ERROR] Kan geen verbinding maken met RabbitMQ: {e}")
+            _logger.error(f" [ERROR] Failed to send message to RabbitMQ: {e}")
+
