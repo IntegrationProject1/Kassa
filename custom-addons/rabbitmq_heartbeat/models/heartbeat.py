@@ -16,7 +16,8 @@ RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq')
 RABBITMQ_USER = os.environ.get('RABBITMQ_USER', 'guest')
 RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD', 'guest')
 
-# RabbitMQ queue and routing key for the heartbeat
+# RabbitMQ exchange, queue, and routing key for the heartbeat
+EXCHANGE_NAME = 'controlroom.exchange'
 QUEUE_NAME = 'controlroom.heartbeat'
 ROUTING_KEY = 'controlroom.heartbeat.ping'
 
@@ -51,9 +52,9 @@ class HeartbeatThread(threading.Thread):
                     current_time = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
                     heartbeat_msg = self.create_heartbeat_message()
                     
-                    # Publish to the specified queue and routing key
+                    # Publish to the specified exchange, queue, and routing key
                     self.channel.basic_publish(
-                        exchange='',  # Using default exchange
+                        exchange=EXCHANGE_NAME,
                         routing_key=ROUTING_KEY,
                         body=heartbeat_msg,
                         properties=pika.BasicProperties(delivery_mode=2)  # Persistent messages
@@ -88,10 +89,24 @@ class HeartbeatThread(threading.Thread):
         self.connection = pika.BlockingConnection(parameters)
         self.channel = self.connection.channel()
         
+        # Declare the exchange
+        self.channel.exchange_declare(
+            exchange=EXCHANGE_NAME,
+            exchange_type='direct',
+            durable=True
+        )
+        
         # Declare the queue
         self.channel.queue_declare(queue=QUEUE_NAME, durable=True)
         
-        _logger.info(f"Connected to RabbitMQ at {RABBITMQ_HOST}")
+        # Bind the queue to the exchange with the routing key
+        self.channel.queue_bind(
+            exchange=EXCHANGE_NAME,
+            queue=QUEUE_NAME,
+            routing_key=ROUTING_KEY
+        )
+        
+        _logger.info(f"Connected to RabbitMQ at {RABBITMQ_HOST} and configured exchange/queue")
     
     def _close_connection(self):
         """Safely closes the RabbitMQ connection."""
