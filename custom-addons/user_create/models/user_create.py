@@ -9,7 +9,8 @@ class ResPartner(models.Model):
 
     @api.model
     def createQueue(self):
-        """Ensure the RabbitMQ queue exists, and create it if it doesn't."""
+        """Ensure the RabbitMQ exchange and queue exist, and bind them."""
+        exchange_name = 'kassa'
         queue_name = 'kassa_user_create'
         try:
             # Get RabbitMQ credentials from the environment variables
@@ -22,15 +23,28 @@ class ResPartner(models.Model):
             connection = pika.BlockingConnection(pika.ConnectionParameters(host=rabbitmq_host, credentials=credentials))
             channel = connection.channel()
 
+            # Check if the exchange exists, create if it doesn't
             try:
-                # Check if the queue exists (passive=True)
-                channel.queue_declare(queue=queue_name, passive=True)
-                print("Queue " + queue_name + " already exists.")
+                channel.exchange_declare(exchange=exchange_name, exchange_type='direct', durable=True, passive=True)
+                print(f"Exchange '{exchange_name}' already exists.")
             except pika.exceptions.ChannelClosedByBroker:
-                # If the queue doesn't exist, create it
+                print(f"Exchange '{exchange_name}' does not exist. Creating it.")
                 channel = connection.channel()  # Reopen the channel
-                channel.queue_declare(queue=queue_name)
-                print("Queue " + queue_name + " created successfully.")
+                channel.exchange_declare(exchange=exchange_name, exchange_type='direct', durable=True)
+
+            # Check if the queue exists, create if it doesn't
+            try:
+                channel.queue_declare(queue=queue_name, durable=True, passive=True)
+                print(f"Queue '{queue_name}' already exists.")
+            except pika.exceptions.ChannelClosedByBroker:
+                print(f"Queue '{queue_name}' does not exist. Creating it.")
+                channel = connection.channel()  # Reopen the channel
+                channel.queue_declare(queue=queue_name, durable=True)
+
+            # Bind the queue to the exchange
+            channel.queue_bind(exchange=exchange_name, queue=queue_name, routing_key=queue_name)
+
+            print(f"Exchange '{exchange_name}' and queue '{queue_name}' are set up successfully.")
 
             # Close the connection
             connection.close()
@@ -43,7 +57,8 @@ class ResPartner(models.Model):
         # Call the original create method to create the customer
         partner = super(ResPartner, self).create(vals)
 
-        # Define the queue name
+        # Define the exchange and queue name
+        exchange_name = 'kassa'
         queue_name = 'kassa_user_create'
 
         try:
@@ -57,7 +72,7 @@ class ResPartner(models.Model):
             connection = pika.BlockingConnection(pika.ConnectionParameters(host=rabbitmq_host, credentials=credentials))
             channel = connection.channel()
 
-            # Ensure the queue exists
+            # Ensure the exchange and queue exist
             self.createQueue()
 
             # Serialize the partner data into a dictionary
@@ -77,8 +92,8 @@ class ResPartner(models.Model):
             # Convert the dictionary to a JSON string
             message = json.dumps(partner_data)
 
-            # Publish the message to the queue
-            channel.basic_publish(exchange='', routing_key=queue_name, body=message)
+            # Publish the message to the exchange
+            channel.basic_publish(exchange=exchange_name, routing_key=queue_name, body=message)
 
             # Close the connection
             connection.close()
