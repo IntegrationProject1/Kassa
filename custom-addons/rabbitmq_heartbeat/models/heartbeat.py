@@ -11,14 +11,16 @@ from odoo.service import common
 
 _logger = logging.getLogger(__name__)
 
-# Configuration with environment variable fallbacks
+# Only use the variables that are already in docker-compose.yml
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq')
-QUEUE_NAME = os.environ.get('RABBITMQ_QUEUE', 'heartbeat')
-HEARTBEAT_INTERVAL = float(os.environ.get('HEARTBEAT_INTERVAL', '0.5'))
-SERVICE_NAME = os.environ.get('SERVICE_NAME', 'Odoo_POS')
-ENVIRONMENT = os.environ.get('ODOO_ENVIRONMENT', 'production')
+RABBITMQ_USER = os.environ.get('RABBITMQ_USER', 'guest')
+RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD', 'guest')
 
-# Module-level variables for true singleton implementation
+# RabbitMQ queue and routing key for the heartbeat
+QUEUE_NAME = 'controlroom.heartbeat'
+ROUTING_KEY = 'controlroom.heartbeat.ping'
+
+# Module-level variables for singleton implementation
 _thread_lock = threading.Lock()
 _heartbeat_thread_instance = None
 _is_thread_running = False
@@ -26,15 +28,13 @@ _is_thread_running = False
 class HeartbeatThread(threading.Thread):
     """Thread that sends a heartbeat to RabbitMQ at specified intervals."""
     
-    def __init__(self, service_name=None, interval=None):
+    def __init__(self):
         super().__init__()
         self.daemon = True  # Ensures thread stops when Odoo stops
         self.running = True
-        self.service_name = service_name or SERVICE_NAME
-        self.interval = interval or HEARTBEAT_INTERVAL
         self.connection = None
         self.channel = None
-        self.instance_id = id(self)  # Store a unique ID for debugging
+        self.instance_id = id(self)
         _logger.info(f"HeartbeatThread instance created with ID: {self.instance_id}")
 
     def run(self):
@@ -50,16 +50,17 @@ class HeartbeatThread(threading.Thread):
                 try:
                     current_time = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
                     heartbeat_msg = self.create_heartbeat_message()
+                    
+                    # Publish to the specified queue and routing key
                     self.channel.basic_publish(
-                        exchange='',
-                        routing_key=QUEUE_NAME,
+                        exchange='',  # Using default exchange
+                        routing_key=ROUTING_KEY,
                         body=heartbeat_msg,
                         properties=pika.BasicProperties(delivery_mode=2)  # Persistent messages
                     )
-                    # Include instance ID in logs
-                    print(f"[{current_time}] Heartbeat sent for {self.service_name} (ID: {self.instance_id})")
-                    _logger.info(f"[HEARTBEAT] Sent heartbeat for {self.service_name} at {current_time}")
-                    time.sleep(self.interval)
+                    
+                    _logger.info(f"[HEARTBEAT] Sent heartbeat at {current_time}")
+                    time.sleep(0.5)  # Fixed interval of 0.5 seconds
                 except pika.exceptions.AMQPConnectionError:
                     _logger.warning("Lost connection to RabbitMQ. Attempting to reconnect...")
                     self._setup_connection()
@@ -74,10 +75,9 @@ class HeartbeatThread(threading.Thread):
             _logger.info(f"HeartbeatThread stopping with ID: {self.instance_id}")
             self._close_connection()
     
-    # Rest of the methods remain the same...
     def _setup_connection(self):
         """Establishes connection to RabbitMQ."""
-        credentials = pika.PlainCredentials('guest', 'guest')
+        credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD)
         parameters = pika.ConnectionParameters(
             host=RABBITMQ_HOST,
             credentials=credentials,
@@ -87,7 +87,10 @@ class HeartbeatThread(threading.Thread):
         
         self.connection = pika.BlockingConnection(parameters)
         self.channel = self.connection.channel()
+        
+        # Declare the queue
         self.channel.queue_declare(queue=QUEUE_NAME, durable=True)
+        
         _logger.info(f"Connected to RabbitMQ at {RABBITMQ_HOST}")
     
     def _close_connection(self):
@@ -101,71 +104,47 @@ class HeartbeatThread(threading.Thread):
         self.running = False
         
     def create_heartbeat_message(self):
-        """Generates an XML heartbeat message in the required format."""
-        # Create the root element
+        """Generates a simple XML heartbeat message."""
         root = ET.Element("Heartbeat")
-    
+        
         # Add ServiceName element
         service_name = ET.SubElement(root, "ServiceName")
-        service_name.text = self.service_name
-    
+        service_name.text = "Odoo_POS"
+        
         # Add Status element
         status = ET.SubElement(root, "Status")
         status.text = "OK"
         
-        # Add Timestamp element -> ISO format
+        # Add Timestamp element
         timestamp = ET.SubElement(root, "Timestamp")
-        timestamp.text = datetime.datetime.utcnow().isoformat() + "Z"  # Adding Z for UTC timezone
+        timestamp.text = datetime.datetime.utcnow().isoformat() + "Z"
         
-        # Add HeartBeatInterval element
-        interval = ET.SubElement(root, "HeartBeatInterval")
-        interval.text = str(self.interval)
+        # Add Host
+        host = ET.SubElement(root, "Host")
+        host.text = socket.gethostname()
         
-        # Add Metadata section
-        metadata = ET.SubElement(root, "Metadata")
-        
-        # Add Version in Metadata
-        version = ET.SubElement(metadata, "Version")
-        version.text = "1.0.0"
-        
-        # Add Host in Metadata
-        host = ET.SubElement(metadata, "Host")
-        host.text = socket.gethostname() 
-        
-        # Add Environment in Metadata
-        environment = ET.SubElement(metadata, "Environment")
-        environment.text = ENVIRONMENT
-        
-        # Convert to str and return
+        # Convert to string and return
         return ET.tostring(root, encoding="utf-8", method="xml").decode()
 
 
 class RabbitMQHeartbeat(models.AbstractModel):
     _name = 'rabbitmq.heartbeat'
     _description = 'RabbitMQ Heartbeat Service'
-    
-    @api.model
-    def get_config_param(self, param_name, default=None):
-        """Get a configuration parameter from ir.config_parameter."""
-        return self.env['ir.config_parameter'].sudo().get_param(f'rabbitmq_heartbeat.{param_name}', default)
 
     @api.model
-    def start_heartbeat(self, service_name=None, interval=None):
+    def start_heartbeat(self):
         """Start the heartbeat thread if it's not already running."""
         global _thread_lock, _heartbeat_thread_instance, _is_thread_running
         
         with _thread_lock:
             # Check if the thread is already running
             if _is_thread_running:
-                _logger.info(f"Heartbeat thread is already running, not starting a new one")
+                _logger.info("Heartbeat thread is already running")
                 return False
                 
-            # Create a new thread instance if needed
-            if not _heartbeat_thread_instance:
-                _heartbeat_thread_instance = HeartbeatThread(service_name=service_name, interval=interval)
-                
-            # Log and start the thread
-            _logger.info(f"Starting heartbeat service for {_heartbeat_thread_instance.service_name} every {_heartbeat_thread_instance.interval} seconds...")
+            # Create and start a new thread
+            _heartbeat_thread_instance = HeartbeatThread()
+            _logger.info("Starting heartbeat service...")
             _heartbeat_thread_instance.start()
             return True
 
@@ -176,7 +155,7 @@ class RabbitMQHeartbeat(models.AbstractModel):
         
         with _thread_lock:
             if _heartbeat_thread_instance and _heartbeat_thread_instance.is_alive():
-                _logger.info(f"Stopping heartbeat service (ID: {_heartbeat_thread_instance.instance_id})...")
+                _logger.info(f"Stopping heartbeat service...")
                 _heartbeat_thread_instance.stop()
                 return True
             return False
