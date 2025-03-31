@@ -1,10 +1,13 @@
 {
-    'name': 'User Create RabbitMQ Integration',
+    'name': "User Create RabbitMQ Integration",
+    'description': """
+        This module allows updating user profiles and settings.
+        It extends the functionality of the standard Odoo user management.
+    """,
+    'author': "Milan en Danial Mubeasher",
+    'category': 'tools',
     'version': '1.0',
-    'summary': 'Send RabbitMQ messages when a new User is created',
-    'author': 'Danial Mubeasher',
     'depends': ['base'],
-    'data': [],
     'installable': True,
     'application': False,
 }
