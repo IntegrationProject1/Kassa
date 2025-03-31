@@ -78,7 +78,6 @@ class UserDeleteThread(threading.Thread):
                         host=RABBITMQ_HOST,
                         port=RABBITMQ_PORT,
                         credentials=credentials,
-                        heartbeat=600
                     )
                 )
                 

@@ -21,14 +21,14 @@ RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
 
 # Define which queues we want to consume
 SERVICE_QUEUES = [
-    'crm_user_update',
-    'facturatie_user_update',
-    'frontend_user_update'
+    'crm_user_create',
+    'facturatie_user_create',
+    'frontend_user_create'
 ]
 
 # Add this to make logs more visible
 def log_message(message):
-    print(f"[USER_UPDATE_MODULE] {message}")
+    print(f"[USER_CREATE_MODULE] {message}")
     _logger.info(message)
 
 # XSD Schema as a constant
@@ -61,8 +61,8 @@ XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
     </xs:element>
 </xs:schema>'''
 
-class UserUpdateThread(threading.Thread):
-    """Thread that listens for user update messages on RabbitMQ"""
+class UserCreateThread(threading.Thread):
+    """Thread that listens for user create messages on RabbitMQ"""
     
     def __init__(self, env):
         super().__init__()
@@ -74,7 +74,7 @@ class UserUpdateThread(threading.Thread):
     
     def run(self):
         """Listens to messages from the specified service queues"""
-        log_message(f"Starting UserUpdateThread connecting to {RABBITMQ_HOST}:{RABBITMQ_PORT}")
+        log_message(f"Starting UserCreateThread connecting to {RABBITMQ_HOST}:{RABBITMQ_PORT}")
         log_message(f"Will consume from {len(SERVICE_QUEUES)} queues: {', '.join(SERVICE_QUEUES)}")
         
         while self.running:
@@ -92,6 +92,7 @@ class UserUpdateThread(threading.Thread):
                         host=RABBITMQ_HOST,
                         port=RABBITMQ_PORT,
                         credentials=credentials,
+                        heartbeat=600
                     )
                 )
                 
@@ -172,7 +173,7 @@ class UserUpdateThread(threading.Thread):
                     except:
                         pass
         
-        log_message("UserUpdateThread stopped")
+        log_message("UserCreateThread stopped")
     
     def _process_message(self, body, queue_name=None):
         """Processes an XML message to update or create a user"""
@@ -270,6 +271,8 @@ class UserUpdateThread(threading.Thread):
             if password_elem is not None and password_elem.text:
                 user_data['password'] = password_elem.text
                 log_message("Found Password field")
+            else:
+                user_data['password'] = ""  # Set password to empty string if not provided
             
             # Extract optional personal information
             optional_fields = ['FirstName', 'LastName', 'PhoneNumber', 'EmailAddress']
@@ -312,232 +315,126 @@ class UserUpdateThread(threading.Thread):
         try:
             user_model = env['res.users'].sudo()
             partner_model = env['res.partner'].sudo()
-            
-            # Log the first 10 users in the system for debugging
-            all_users = user_model.search([], limit=10)
-            log_message(f"First 10 users in the system:")
-            for i, user in enumerate(all_users):
-                log_message(f"  User {i+1}: ID={user.id}, Login={user.login}, Name={user.name}")
-            
-            # Try to find the user by external ID, login, or database ID
+
             user_id = user_data.get('user_id')
             log_message(f"Looking for user with ID/login: {user_id}")
-            
-            # First try direct login match
-            users = user_model.search([('login', '=', user_id)])
-            if not users:
-                # Try to find by database ID if user_id is numeric
-                if user_id.isdigit():
-                    users = user_model.browse([int(user_id)])
-                    if users.exists():
-                        log_message(f"Found user by database ID: {user_id}")
-                    else:
-                        users = False
-            
-            log_message(f"Found {len(users) if users else 0} users with ID/login {user_id}")
-            
-            if user_data.get('action_type') == 'UPDATE':
-                if not users:
-                    log_message(f"User with ID {user_id} not found for update")
-                    return False
-                    
-                log_message(f"Updating user with ID {user_id}, database ID: {users[0].id}, login: {users[0].login}")
-                user = users[0]
-                update_vals = {}
-                
-                # Update user fields
-                if 'first_name' in user_data or 'last_name' in user_data:
-                    first_name = user_data.get('first_name', '')
-                    last_name = user_data.get('last_name', '')
-                    
-                    # If either is provided, create full name
-                    if first_name or last_name:
-                        # If both provided, use both
-                        if first_name and last_name:
-                            update_vals['name'] = f"{first_name} {last_name}"
-                        # If only first name provided
-                        elif first_name:
-                            update_vals['name'] = first_name
-                        # If only last name provided
-                        else:
-                            update_vals['name'] = last_name
-                        
-                        log_message(f"Updating user name to: {update_vals['name']}")
-                
-                if 'email_address' in user_data:
-                    update_vals['email'] = user_data.get('email_address')
-                    update_vals['login'] = user_data.get('email_address')  # Optional: update login too
-                    log_message(f"Updating user email/login to: {update_vals['email']}")
-                    
-                if 'password' in user_data:
-                    update_vals['password'] = user_data.get('password')
-                    log_message("Updating user password")
-                    
-                if update_vals:
-                    log_message(f"Writing user fields: {update_vals.keys()}")
-                    try:
-                        user.write(update_vals)
-                        log_message("User fields updated successfully")
-                    except Exception as e:
-                        log_message(f"Error updating user fields: {str(e)}")
-                        log_message(traceback.format_exc())
-                        return False
-                    
-                # Update partner fields
-                partner_vals = {}
-                if 'phone_number' in user_data:
-                    partner_vals['phone'] = user_data.get('phone_number')
-                    log_message(f"Updating partner phone to: {partner_vals['phone']}")
-                    
-                # Update business information
-                if 'business' in user_data:
-                    business = user_data.get('business')
-                    log_message(f"Processing business data: {business}")
-                    
-                    # Check if partner has company info already
-                    has_company = user.partner_id.company_name or user.partner_id.parent_id
-                    log_message(f"User partner has company: {has_company}")
-                    
-                    # If business name exists in data, process business info
-                    if 'business_name' in business:
-                        business_name = business.get('business_name')
-                        log_message(f"Business name from message: {business_name}")
-                        
-                        if has_company:
-                            # Update existing company info
-                            partner_vals['company_name'] = business_name
-                            log_message(f"Updating company name to: {business_name}")
-                        else:
-                            # Create new company
-                            log_message(f"Creating new company: {business_name}")
-                            try:
-                                # Create a new company partner
-                                company_partner_vals = {
-                                    'name': business_name,
-                                    'is_company': True,
-                                    'type': 'contact',
-                                }
-                                
-                                # Add business fields if available
-                                if 'business_email' in business:
-                                    company_partner_vals['email'] = business.get('business_email')
-                                    log_message(f"Setting company email: {company_partner_vals['email']}")
-                                    
-                                if 'real_address' in business:
-                                    company_partner_vals['street'] = business.get('real_address')
-                                    log_message(f"Setting company address: {company_partner_vals['street']}")
-                                    
-                                if 'btw_number' in business:
-                                    company_partner_vals['vat'] = business.get('btw_number')
-                                    log_message(f"Setting company VAT: {company_partner_vals['vat']}")
-                                    
-                                if 'facturation_address' in business:
-                                    company_partner_vals['street2'] = business.get('facturation_address')
-                                    log_message(f"Setting company facturation address: {company_partner_vals['street2']}")
-                                
-                                # Create the company partner
-                                new_company_partner = partner_model.create(company_partner_vals)
-                                log_message(f"Created new company partner with ID: {new_company_partner.id}")
-                                
-                                # Link individual to the company
-                                partner_vals['parent_id'] = new_company_partner.id
-                                log_message(f"Linking user to company with ID: {new_company_partner.id}")
-                                
-                                # Set the contact type to "contact" (individual)
-                                partner_vals['type'] = 'contact'
-                                
-                            except Exception as e:
-                                log_message(f"Error creating company: {str(e)}")
-                                log_message(traceback.format_exc())
-                                return False
-                    else:
-                        # No business name but other business fields, update as normal
-                        if 'business_email' in business:
-                            partner_vals['email'] = business.get('business_email')
-                            log_message(f"Updating business email to: {partner_vals['email']}")
-                            
+
+            if user_data.get('action_type') == 'CREATE':
+                log_message(f"Creating new user with ID/login: {user_id}")
+
+                # Prepare values for creating a new user
+                create_vals = {
+                    'login': user_data.get('email_address'),
+                    'name': f"{user_data.get('first_name', '')} {user_data.get('last_name', '')}",
+                    'email': user_data.get('email_address'),
+                    'password': user_data.get('password'),
+                }
+
+                # Create the new user
+                try:
+                    new_user = user_model.create(create_vals)
+                    log_message(f"Created new user: {new_user.id}, Login: {new_user.login}")
+
+                    # Create the partner record
+                    partner_vals = {
+                        'name': f"{user_data.get('first_name', '')} {user_data.get('last_name', '')}",
+                        'email': user_data.get('email_address'),
+                        'phone': user_data.get('phone_number'),
+                    }
+
+                    # Create the partner (individual or company based on the business data)
+                    if 'business' in user_data:
+                        business = user_data.get('business')
+                        if 'business_name' in business:
+                            partner_vals['company_name'] = business['business_name']
                         if 'real_address' in business:
-                            partner_vals['street'] = business.get('real_address')
-                            log_message(f"Updating address to: {partner_vals['street']}")
-                            
+                            partner_vals['street'] = business['real_address']
                         if 'btw_number' in business:
-                            partner_vals['vat'] = business.get('btw_number')
-                            log_message(f"Updating VAT to: {partner_vals['vat']}")
-                        
+                            partner_vals['vat'] = business['btw_number']
                         if 'facturation_address' in business:
-                            partner_vals['street2'] = business.get('facturation_address')
-                            log_message(f"Updating facturation address to: {partner_vals['street2']}")
-                    
-                if partner_vals:
-                    log_message(f"Writing partner fields: {partner_vals.keys()}")
-                    try:
-                        user.partner_id.write(partner_vals)
-                        log_message("Partner fields updated successfully")
-                    except Exception as e:
-                        log_message(f"Error updating partner fields: {str(e)}")
-                        log_message(traceback.format_exc())
-                        return False
-                    
-                log_message(f"User {user_id} updated successfully")
-                return True
-                    
-            elif user_data.get('action_type') == 'CREATE':
-                # Skip CREATE actions as they are handled by another module
-                log_message(f"CREATE action for user ID {user_id} skipped - handled by another module")
-                return True  # Return True to acknowledge the message
-                    
+                            partner_vals['street2'] = business['facturation_address']
+
+                    new_partner = partner_model.create(partner_vals)
+                    log_message(f"Created new partner: {new_partner.id}, Name: {new_partner.name}")
+
+                    # Link user to partner
+                    new_user.partner_id = new_partner.id
+                    log_message(f"Linked new user {new_user.id} to partner {new_partner.id}")
+
+                    # Commit changes
+                    new_user.env.cr.commit()
+
+                    return True  # Success in creating user
+
+                except Exception as e:
+                    log_message(f"Error creating user or partner: {str(e)}")
+                    log_message(traceback.format_exc())
+                    return False
+
+            elif user_data.get('action_type') == 'UPDATE':
+                log_message(f"UPDATE action skipped for user ID {user_id}")
+                return False  # Skip update action
+
             elif user_data.get('action_type') == 'DELETE':
-                log_message(f"handled by other module")
-                # Skip DELETE actions as they are handled by another module
-                return True
-                
+                # Handle deletion or archiving of user (as per existing logic)
+                return False
+
             else:
                 log_message(f"Unknown action type: {user_data.get('action_type')}")
                 return False
-                
+
         except Exception as e:
             log_message(f"Unexpected error processing user data: {str(e)}")
             log_message(traceback.format_exc())
             return False
-    
-    def stop(self):
-        """Stop the thread gracefully"""
-        self.running = False
-        print("Stopping UserUpdateThread...")
+
 
 # Global thread instance
-user_update_thread = None
+user_create_thread = None
 
-class RabbitMQUserUpdate(models.AbstractModel):
-    _name = 'rabbitmq.user.update'
-    _description = 'RabbitMQ User Update Service'
+class RabbitMQUserCreate(models.AbstractModel):
+    _name = 'rabbitmq.user.create'
+    _description = 'RabbitMQ User create Service'
     
     @api.model
     def start_service(self):
-        """Start the user update service if it's not already running"""
-        global user_update_thread
-        if not user_update_thread or not user_update_thread.is_alive():
-            print("Starting RabbitMQ User Update Service...")
-            user_update_thread = UserUpdateThread(self.env)
-            user_update_thread.start()
+        """Start the user create service if it's not already running"""
+        global user_create_thread
+        if not user_create_thread or not user_create_thread.is_alive():
+            print("Starting RabbitMQ User create Service...")
+            user_create_thread = UserCreateThread(self.env)
+            user_create_thread.start()
             return True
-        print("RabbitMQ User Update Service already running.")
+        print("RabbitMQ User create Service already running.")
         return False
     
     @api.model
     def stop_service(self):
-        """Stop the user update service"""
-        global user_update_thread
-        if user_update_thread and user_update_thread.is_alive():
-            user_update_thread.stop()
+        """Stop the user create service"""
+        global user_create_thread
+        if user_create_thread and user_create_thread.is_alive():
+            user_create_thread.stop()
             return True
         return False
 
-class RabbitMQUserUpdateStartup(models.AbstractModel):
-    _name = "rabbitmq.user.update.startup"
-    _description = "Start RabbitMQ User Update on Odoo startup"
+class RabbitMQUserCreateStartup(models.AbstractModel):
+    _name = "rabbitmq.user.create.startup"
+    _description = "Start RabbitMQ User create on Odoo startup"
     
     @api.model
     def _register_hook(self):
         """Start the service on Odoo startup"""
-        self.env['rabbitmq.user.update'].start_service()
+        self.env['rabbitmq.user.create'].start_service()
+        
+        
+"""om te testen of het werkt kan je dit in rabbitmq zetten (gegevens wel aanpassen): 
+<UserMessage>
+    <ActionType>CREATE</ActionType>
+    <UserID>54321</UserID>
+    <TimeOfAction>2025-03-30T12:34:56Z</TimeOfAction>
+    <FirstName>John</FirstName>
+    <LastName>Pork</LastName>
+    <PhoneNumber>+1234563890</PhoneNumber>
+    <EmailAddress>john.pork@example.com</EmailAddress>
+</UserMessage>
+"""
