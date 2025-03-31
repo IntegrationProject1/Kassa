@@ -92,6 +92,7 @@ class UserUpdateThread(threading.Thread):
                         host=RABBITMQ_HOST,
                         port=RABBITMQ_PORT,
                         credentials=credentials,
+                        heartbeat=600
                     )
                 )
                 
@@ -487,9 +488,20 @@ class UserUpdateThread(threading.Thread):
                 return True  # Return True to acknowledge the message
                     
             elif user_data.get('action_type') == 'DELETE':
-                log_message(f"handled by other module")
-                # Skip DELETE actions as they are handled by another module
-                return True
+                if not users:
+                    log_message(f"User with ID {user_id} not found for deletion")
+                    return False
+                    
+                log_message(f"Archiving user with ID {user_id}")
+                # Archive the user instead of deleting
+                try:
+                    users.write({'active': False})
+                    log_message(f"User {user_id} archived successfully")
+                    return True
+                except Exception as e:
+                    log_message(f"Error archiving user: {str(e)}")
+                    log_message(traceback.format_exc())
+                    return False
                 
             else:
                 log_message(f"Unknown action type: {user_data.get('action_type')}")
