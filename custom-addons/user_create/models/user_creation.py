@@ -17,7 +17,7 @@ _logger = logging.getLogger(__name__)
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST')
 RABBITMQ_PORT = int(os.environ.get('RABBITMQ_PORT'))
 RABBITMQ_USER = os.environ.get('RABBITMQ_USER')
-RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASS')
+RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
 
 # Define which queues we want to consume
 SERVICE_QUEUES = [
