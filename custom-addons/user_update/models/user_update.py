@@ -28,6 +28,11 @@ XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
     </xs:element>
 </xs:schema>'''
 
+RABBITMQ_HOST = os.getenv('RABBITMQ_HOST')
+RABBITMQ_USER = os.getenv('RABBITMQ_USER')
+RABBITMQ_PASSWORD = os.getenv('RABBITMQ_PASSWORD')
+RABBITMQ_PORT = os.getenv('RABBITMQ_PORT')
+
 class ResPartner(models.Model):
     _inherit = 'res.partner'
 
@@ -44,8 +49,8 @@ class ResPartner(models.Model):
 
     def send_update_message(self, partner_data):
         """Send a RabbitMQ message with updated user information."""
-        exchange_name = 'kassa'
-        queue_name = 'kassa_user_update'
+        exchange_name = 'user'
+        queue_name = 'kassa_user_update_test'
         try:
             # Convert partner_data to XML
             print("Converting partner data to XML...")
@@ -61,13 +66,8 @@ class ResPartner(models.Model):
             # Validate XML against the XSD schema
             self.validate_with_xsd(xml_data)
 
-            # Get RabbitMQ credentials from the environment variables
-            rabbitmq_host = os.getenv('RABBITMQ_HOST')
-            rabbitmq_user = os.getenv('RABBITMQ_USER')
-            rabbitmq_password = os.getenv('RABBITMQ_PASSWORD')
-
-            credentials = pika.PlainCredentials(rabbitmq_user, rabbitmq_password)
-            connection = pika.BlockingConnection(pika.ConnectionParameters(host=rabbitmq_host, credentials=credentials))
+            credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD)
+            connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST,port=RABBITMQ_PORT ,  credentials=credentials))
             channel = connection.channel()
 
             # Ensure the exchange exists
