@@ -16,8 +16,8 @@ RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
 
 # Exchange and queue names
 EXCHANGE_NAME = 'user'
-QUEUE_NAME = 'kassa_user_update_test'
-ROUTING_KEY = 'kassa.user.update.test'
+QUEUE_NAME = 'kassa_user_update'
+ROUTING_KEY = 'kassa.user.update'
 
 # XSD Schema for validation
 USER_UPDATE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
