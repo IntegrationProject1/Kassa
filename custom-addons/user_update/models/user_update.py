@@ -50,7 +50,7 @@ class ResPartner(models.Model):
     def send_update_message(self, partner_data):
         """Send a RabbitMQ message with updated user information."""
         exchange_name = 'user'
-        queue_name = 'kassa_user_update_test'
+        queue_name = 'kassa_user_update'
         try:
             # Convert partner_data to XML
             print("Converting partner data to XML...")
