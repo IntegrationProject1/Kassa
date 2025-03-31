@@ -2,3 +2,5 @@
 __pycache__/
 data/odoo.log
 .env
+.venv/lib64
+
