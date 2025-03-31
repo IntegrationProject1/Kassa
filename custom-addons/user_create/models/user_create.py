@@ -1,88 +1,119 @@
 import pika
 import os
 import json
-import threading
+import xml.etree.ElementTree as ET
+import xmlschema
 from odoo import models, fields, api
+
+XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+    <xs:element name="UserMessage">
+        <xs:complexType>
+            <xs:sequence>
+                <xs:element name="ActionType" type="xs:string"/>
+                <xs:element name="UserID" type="xs:string"/>
+                <xs:element name="TimeOfAction" type="xs:dateTime"/>
+                <xs:element name="FirstName" type="xs:string" minOccurs="0"/>
+                <xs:element name="LastName" type="xs:string" minOccurs="0"/>
+                <xs:element name="PhoneNumber" type="xs:string" minOccurs="0"/>
+                <xs:element name="EmailAddress" type="xs:string" minOccurs="0"/>
+                <xs:element name="Business" minOccurs="0">
+                    <xs:complexType>
+                        <xs:sequence>
+                            <xs:element name="BusinessName" type="xs:string" minOccurs="0"/>
+                            <xs:element name="BusinessEmail" type="xs:string" minOccurs="0"/>
+                            <xs:element name="RealAddress" type="xs:string" minOccurs="0"/>
+                            <xs:element name="BTWNumber" type="xs:string" minOccurs="0"/>
+                            <xs:element name="FacturationAddress" type="xs:string" minOccurs="0"/>
+                        </xs:sequence>
+                    </xs:complexType>
+                </xs:element>
+            </xs:sequence>
+        </xs:complexType>
+    </xs:element>
+</xs:schema>'''
+
+
+RABBITMQ_HOST = os.getenv('RABBITMQ_HOST')
+RABBITMQ_USER = os.getenv('RABBITMQ_USER')
+RABBITMQ_PASSWORD = os.getenv('RABBITMQ_PASSWORD')
+RABBITMQ_PORT = os.getenv('RABBITMQ_PORT')
 
 class ResPartner(models.Model):
     _inherit = 'res.partner'
 
-    @api.model
-    def createQueue(self):
-        """Ensure the RabbitMQ queue exists, and create it if it doesn't."""
-        queue_name = 'kassa_user_create'
+    def validate_with_xsd(self, xml_data):
+        """Validate XML data against the embedded XSD schema."""
         try:
-            # Get RabbitMQ credentials from the environment variables
-            rabbitmq_host = os.getenv('RABBITMQ_HOST')
-            rabbitmq_user = os.getenv('RABBITMQ_USER')
-            rabbitmq_password = os.getenv('RABBITMQ_PASSWORD')
-            credentials = pika.PlainCredentials(rabbitmq_user, rabbitmq_password)
-
-            # Connect to RabbitMQ
-            connection = pika.BlockingConnection(pika.ConnectionParameters(host=rabbitmq_host, credentials=credentials))
-            channel = connection.channel()
-
-            try:
-                # Check if the queue exists (passive=True)
-                channel.queue_declare(queue=queue_name, passive=True)
-                print("Queue " + queue_name + " already exists.")
-            except pika.exceptions.ChannelClosedByBroker:
-                # If the queue doesn't exist, create it
-                channel = connection.channel()  # Reopen the channel
-                channel.queue_declare(queue=queue_name)
-                print("Queue " + queue_name + " created successfully.")
-
-            # Close the connection
-            connection.close()
-        except Exception as e:
-            print("Connection or queue creation error: ", e)
+            print("Validating XML data against XSD schema...")
+            schema = xmlschema.XMLSchema(XSD_SCHEMA)
+            schema.validate(xml_data)
+            print("XML validation successful.")
+        except xmlschema.validators.exceptions.XMLSchemaValidationError as e:
+            print(f"XML validation error: {e}")
+            raise ValueError("XML validation failed.")
 
     @api.model
     def create(self, vals):
-        """Override the create method to send user data to RabbitMQ."""
-        # Call the original create method to create the customer
+        """Override the create method to send user data to RabbitMQ with XSD validation."""
+        print("Creating a new partner...")
         partner = super(ResPartner, self).create(vals)
 
-        # Define the queue name
+        exchange_name = 'user'
         queue_name = 'kassa_user_create'
 
         try:
-            # Get RabbitMQ credentials from the environment variables
-            rabbitmq_host = os.getenv('RABBITMQ_HOST')
-            rabbitmq_user = os.getenv('RABBITMQ_USER')
-            rabbitmq_password = os.getenv('RABBITMQ_PASSWORD')
-            credentials = pika.PlainCredentials(rabbitmq_user, rabbitmq_password)
-
-            # Connect to RabbitMQ
-            connection = pika.BlockingConnection(pika.ConnectionParameters(host=rabbitmq_host, credentials=credentials))
-            channel = connection.channel()
-
-            # Ensure the queue exists
-            self.createQueue()
-
-            # Serialize the partner data into a dictionary
+            print("Serializing partner data...")
             partner_data = {
-                'name': partner.name,
-                'mobile': partner.mobile,
-                'email': partner.email,
-                'street': partner.street,
-                'city': partner.city,
-                'country': partner.country_id.name if partner.country_id else None,
-                'zip': partner.zip,
-                'state': partner.state_id.name if partner.state_id else None,
-                'phone': partner.phone,
-                'website': partner.website,
+                'ActionType': 'CREATE',
+                'UserID': str(partner.id),
+                'TimeOfAction': fields.Datetime.now().isoformat(),  # Use ISO 8601 format
+                'FirstName': partner.name.split(' ')[0] if partner.name else '',
+                'LastName': ' '.join(partner.name.split(' ')[1:]) if partner.name and ' ' in partner.name else '',
+                'PhoneNumber': partner.phone or '',
+                'EmailAddress': partner.email or '',
+                'Business': {
+                    'BusinessName': partner.company_name or '',
+                    'BusinessEmail': partner.email or '',
+                    'RealAddress': partner.street or '',
+                    'BTWNumber': vals.get('vat', ''),
+                    'FacturationAddress': partner.street2 or '',
+                } if partner.is_company else None,
             }
 
-            # Convert the dictionary to a JSON string
-            message = json.dumps(partner_data)
+            print(f"Partner data: {partner_data}")
 
-            # Publish the message to the queue
-            channel.basic_publish(exchange='', routing_key=queue_name, body=message)
+            print("Converting partner data to XML...")
+            root = ET.Element("UserMessage")
+            for key, value in partner_data.items():
+                if isinstance(value, dict):
+                    business_element = ET.SubElement(root, key)
+                    for sub_key, sub_value in value.items():
+                        if sub_value:
+                            sub_child = ET.SubElement(business_element, sub_key)
+                            sub_child.text = sub_value
+                elif value:
+                    child = ET.SubElement(root, key)
+                    child.text = str(value)
 
-            # Close the connection
+            xml_data = ET.tostring(root, encoding='utf-8')
+            print(f"Generated XML: {xml_data.decode('utf-8')}")
+
+            print("Validating XML...")
+            self.validate_with_xsd(xml_data)
+
+            print("Connecting to RabbitMQ...")
+            credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD)
+            connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST,port=RABBITMQ_PORT , credentials=credentials))
+            channel = connection.channel()
+
+            print("Publishing message to RabbitMQ...")
+            channel.basic_publish(exchange=exchange_name, routing_key=queue_name, body=xml_data)
+            print(f"Message published to exchange '{exchange_name}' with routing key '{queue_name}'.")
+
             connection.close()
         except Exception as e:
-            print("Connection or message publish error: ", e)
+            print(f"Error in create method: {e}")
+            raise
 
         return partner
