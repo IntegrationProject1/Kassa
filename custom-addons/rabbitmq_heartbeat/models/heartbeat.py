@@ -117,7 +117,7 @@ class HeartbeatThread(threading.Thread):
         
         # Add ServiceName element
         service_name = ET.SubElement(root, "ServiceName")
-        service_name.text = "Odoo_POS"
+        service_name.text = "Odoo_POS"  # Changed from Odoo_POS to Monitoring
         
         # Add Status element
         status = ET.SubElement(root, "Status")
@@ -127,9 +127,24 @@ class HeartbeatThread(threading.Thread):
         timestamp = ET.SubElement(root, "Timestamp")
         timestamp.text = datetime.datetime.utcnow().isoformat() + "Z"
         
-        # Add Host
-        host = ET.SubElement(root, "Host")
-        host.text = socket.gethostname()
+        # Add HeartBeatInterval element
+        heartbeat_interval = ET.SubElement(root, "HeartBeatInterval")
+        heartbeat_interval.text = "{HEARTBEAT_INTERVAL}"
+        
+        # Add Metadata element with nested elements
+        metadata = ET.SubElement(root, "Metadata")
+        
+        # Add Version element under Metadata
+        version = ET.SubElement(metadata, "Version")
+        version.text = "1.0.0"
+        
+        # Add Host element under Metadata
+        host = ET.SubElement(metadata, "Host")
+        host.text = "Azure_VM"
+        
+        # Add Environment element under Metadata
+        environment = ET.SubElement(metadata, "Environment")
+        environment.text = "production"
         
         # Convert to string and return
         xml_message = ET.tostring(root, encoding="utf-8", method="xml").decode()
