@@ -33,6 +33,12 @@ XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
     </xs:element>
 </xs:schema>'''
 
+
+RABBITMQ_HOST = os.getenv('RABBITMQ_HOST')
+RABBITMQ_USER = os.getenv('RABBITMQ_USER')
+RABBITMQ_PASSWORD = os.getenv('RABBITMQ_PASSWORD')
+RABBITMQ_PORT = os.getenv('RABBITMQ_PORT')
+
 class ResPartner(models.Model):
     _inherit = 'res.partner'
 
@@ -48,60 +54,18 @@ class ResPartner(models.Model):
             raise ValueError("XML validation failed.")
 
     @api.model
-    def createQueue(self):
-        """Ensure the RabbitMQ exchange and queue exist, and bind them."""
-        exchange_name = 'kassa'
-        queue_name = 'kassa_user_create'
-        try:
-            print("Connecting to RabbitMQ...")
-            rabbitmq_host = os.getenv('RABBITMQ_HOST')
-            rabbitmq_user = os.getenv('RABBITMQ_USER')
-            rabbitmq_password = os.getenv('RABBITMQ_PASSWORD')
-            print(f"RabbitMQ Host: {rabbitmq_host}, User: {rabbitmq_user}")
-
-            credentials = pika.PlainCredentials(rabbitmq_user, rabbitmq_password)
-            connection = pika.BlockingConnection(pika.ConnectionParameters(host=rabbitmq_host, credentials=credentials))
-            channel = connection.channel()
-
-            print("Checking if exchange exists...")
-            try:
-                channel.exchange_declare(exchange=exchange_name, exchange_type='direct', durable=True, passive=True)
-                print(f"Exchange '{exchange_name}' already exists.")
-            except pika.exceptions.ChannelClosedByBroker:
-                print(f"Exchange '{exchange_name}' does not exist. Creating it.")
-                channel = connection.channel()  # Reopen the channel
-                channel.exchange_declare(exchange=exchange_name, exchange_type='direct', durable=True)
-
-            print("Checking if queue exists...")
-            try:
-                channel.queue_declare(queue=queue_name, durable=True, passive=True)
-                print(f"Queue '{queue_name}' already exists.")
-            except pika.exceptions.ChannelClosedByBroker:
-                print(f"Queue '{queue_name}' does not exist. Creating it.")
-                channel = connection.channel()  # Reopen the channel
-                channel.queue_declare(queue=queue_name, durable=True)
-
-            print("Binding queue to exchange...")
-            channel.queue_bind(exchange=exchange_name, queue=queue_name, routing_key=queue_name)
-
-            print(f"Exchange '{exchange_name}' and queue '{queue_name}' are set up successfully.")
-            connection.close()
-        except Exception as e:
-            print(f"Error in createQueue: {e}")
-
-    @api.model
     def create(self, vals):
         """Override the create method to send user data to RabbitMQ with XSD validation."""
         print("Creating a new partner...")
         partner = super(ResPartner, self).create(vals)
 
-        exchange_name = 'kassa'
+        exchange_name = 'user'
         queue_name = 'kassa_user_create'
 
         try:
             print("Serializing partner data...")
             partner_data = {
-                'ActionType': 'Create',
+                'ActionType': 'CREATE',
                 'UserID': str(partner.id),
                 'TimeOfAction': fields.Datetime.now().isoformat(),  # Use ISO 8601 format
                 'FirstName': partner.name.split(' ')[0] if partner.name else '',
@@ -139,15 +103,9 @@ class ResPartner(models.Model):
             self.validate_with_xsd(xml_data)
 
             print("Connecting to RabbitMQ...")
-            rabbitmq_host = os.getenv('RABBITMQ_HOST')
-            rabbitmq_user = os.getenv('RABBITMQ_USER')
-            rabbitmq_password = os.getenv('RABBITMQ_PASSWORD')
-            credentials = pika.PlainCredentials(rabbitmq_user, rabbitmq_password)
-            connection = pika.BlockingConnection(pika.ConnectionParameters(host=rabbitmq_host, credentials=credentials))
+            credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD)
+            connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST,port=RABBITMQ_PORT , credentials=credentials))
             channel = connection.channel()
-
-            print("Ensuring exchange and queue exist...")
-            self.createQueue()
 
             print("Publishing message to RabbitMQ...")
             channel.basic_publish(exchange=exchange_name, routing_key=queue_name, body=xml_data)
