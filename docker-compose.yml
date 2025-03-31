@@ -36,7 +36,6 @@ services:
       - RABBITMQ_HOST=${RABBITMQ_HOST}
       - RABBITMQ_USER=${RABBITMQ_USER}
       - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
-      - QUEUE_NAME=${RABBITMQ_QUEUE}
     networks:
       - project_network  
     restart: always  
