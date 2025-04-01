@@ -14,10 +14,13 @@ RABBITMQ_PORT = int(os.environ.get('RABBITMQ_PORT'))
 RABBITMQ_USER = os.environ.get('RABBITMQ_USER')
 RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
 
-# Exchange and queue names
+# Exchange and target queue definitions
 EXCHANGE_NAME = 'user'
-QUEUE_NAME = 'kassa_user_create'
-ROUTING_KEY = 'kassa.user.create'
+TARGET_QUEUES = [
+    {'queue': 'crm_user_create', 'routing_key': 'crm.user.create'},
+    {'queue': 'facturatie_user_create', 'routing_key': 'facturatie.user.create'},
+    {'queue': 'frontend_user_create', 'routing_key': 'frontend.user.create'}
+]
 
 # XSD Schema for validation
 USER_CREATE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -117,7 +120,7 @@ class ResPartner(models.Model):
         return xml_string
     
     def publish_user_create(self, partner_data):
-        """Publish user create message to RabbitMQ"""
+        """Publish user create message to other service queues"""
         try:
             user_id = partner_data.get('UserID')
             log_message(f"Publishing user create message for user_id: {user_id}")
@@ -139,33 +142,44 @@ class ResPartner(models.Model):
             channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type='topic', durable=True)
             log_message(f"Exchange '{EXCHANGE_NAME}' declared")
             
-            # Ensure the queue exists
-            log_message(f"Declaring queue '{QUEUE_NAME}'...")
-            channel.queue_declare(queue=QUEUE_NAME, durable=True)
-            log_message(f"Queue '{QUEUE_NAME}' declared")
-            
-            # Bind queue to exchange
-            log_message(f"Binding queue '{QUEUE_NAME}' to exchange '{EXCHANGE_NAME}' with routing key '{ROUTING_KEY}'...")
-            channel.queue_bind(exchange=EXCHANGE_NAME, queue=QUEUE_NAME, routing_key=ROUTING_KEY)
-            log_message(f"Queue binding created")
-            
-            # Publish message
-            log_message(f"Publishing message to exchange '{EXCHANGE_NAME}' with routing key '{ROUTING_KEY}'...")
-            channel.basic_publish(
-                exchange=EXCHANGE_NAME,
-                routing_key=ROUTING_KEY,
-                body=message,
-                properties=pika.BasicProperties(
-                    delivery_mode=2,  # Make message persistent
-                    content_type='application/xml'
-                )
-            )
-            log_message(f"Message published to exchange: {EXCHANGE_NAME} with routing key: {ROUTING_KEY}")
+            # Publish to each target queue
+            success_count = 0
+            for target in TARGET_QUEUES:
+                queue_name = target['queue']
+                routing_key = target['routing_key']
+                
+                try:
+                    # Ensure the queue exists
+                    log_message(f"Declaring queue '{queue_name}'...")
+                    channel.queue_declare(queue=queue_name, durable=True)
+                    log_message(f"Queue '{queue_name}' declared")
+                    
+                    # Bind queue to exchange
+                    log_message(f"Binding queue '{queue_name}' to exchange '{EXCHANGE_NAME}' with routing key '{routing_key}'...")
+                    channel.queue_bind(exchange=EXCHANGE_NAME, queue=queue_name, routing_key=routing_key)
+                    log_message(f"Queue binding created")
+                    
+                    # Publish message
+                    log_message(f"Publishing message to exchange '{EXCHANGE_NAME}' with routing key '{routing_key}'...")
+                    channel.basic_publish(
+                        exchange=EXCHANGE_NAME,
+                        routing_key=routing_key,
+                        body=message,
+                        properties=pika.BasicProperties(
+                            delivery_mode=2,  # Make message persistent
+                            content_type='application/xml'
+                        )
+                    )
+                    log_message(f"Message published to queue: {queue_name}")
+                    success_count += 1
+                    
+                except Exception as queue_error:
+                    log_message(f"Error publishing to queue '{queue_name}': {queue_error}")
             
             log_message("Closing RabbitMQ connection...")
             connection.close()
-            log_message(f"RabbitMQ connection closed. Successfully sent create message to {QUEUE_NAME}.")
-            return True
+            log_message(f"RabbitMQ connection closed. Successfully sent create message to {success_count} of {len(TARGET_QUEUES)} queues.")
+            return success_count > 0
             
         except pika.exceptions.AMQPConnectionError as e:
             error_msg = f"RabbitMQ connection error: {e}"
@@ -186,7 +200,7 @@ class ResPartner(models.Model):
         
         # Add partner ID to the recently created set
         # Import the set from the update module
-        from odoo.addons.user_update.models.user_update import ResPartner as UpdateResPartner
+        from odoo.addons.user_update.models.publisher_user_update import ResPartner as UpdateResPartner
         UpdateResPartner._recently_created_partners.add(partner.id)
         
         log_message(f"Added partner ID {partner.id} to recently created set")
