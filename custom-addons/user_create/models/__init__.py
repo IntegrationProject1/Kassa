@@ -1,2 +1,2 @@
 from . import user_creation
-from . import user_create
+from . import publisher_user_create
