@@ -14,18 +14,13 @@ RABBITMQ_PORT = int(os.environ.get('RABBITMQ_PORT'))
 RABBITMQ_USER = os.environ.get('RABBITMQ_USER')
 RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
 
-# Exchange name
+# Exchange and target queue definitions
 EXCHANGE_NAME = 'user'
-
-# Queue names
-QUEUES = ['crm_user_create', 'facturatie_user_create', 'frontend_user_create']
-
-# Routing keys
-ROUTING_KEYS = {
-    'crm_user_create': 'crm.user.create',
-    'facturatie_user_create': 'facturatie.user.create',
-    'frontend_user_create': 'frontend.user.create',
-}
+TARGET_QUEUES = [
+    {'queue': 'crm_user_create', 'routing_key': 'crm.user.create'},
+    {'queue': 'facturatie_user_create', 'routing_key': 'facturatie.user.create'},
+    {'queue': 'frontend_user_create', 'routing_key': 'frontend.user.create'}
+]
 
 # XSD Schema for validation
 USER_CREATE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -125,7 +120,7 @@ class ResPartner(models.Model):
         return xml_string
     
     def publish_user_create(self, partner_data):
-        """Publish user create message to RabbitMQ for multiple queues with routing keys"""
+        """Publish user create message to other service queues"""
         try:
             user_id = partner_data.get('UserID')
             log_message(f"Publishing user create message for user_id: {user_id}")
@@ -147,33 +142,44 @@ class ResPartner(models.Model):
             channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type='topic', durable=True)
             log_message(f"Exchange '{EXCHANGE_NAME}' declared")
             
-            # Publish the message to all queues with their routing keys
-            for queue in QUEUES:
-                routing_key = ROUTING_KEYS[queue]
-                log_message(f"Declaring queue '{queue}'...")
-                channel.queue_declare(queue=queue, durable=True)
-                log_message(f"Queue '{queue}' declared")
+            # Publish to each target queue
+            success_count = 0
+            for target in TARGET_QUEUES:
+                queue_name = target['queue']
+                routing_key = target['routing_key']
                 
-                log_message(f"Binding queue '{queue}' to exchange '{EXCHANGE_NAME}' with routing key '{routing_key}'...")
-                channel.queue_bind(exchange=EXCHANGE_NAME, queue=queue, routing_key=routing_key)
-                log_message(f"Queue binding created for '{queue}' with routing key '{routing_key}'")
-                
-                log_message(f"Publishing message to exchange '{EXCHANGE_NAME}' with routing key '{routing_key}'...")
-                channel.basic_publish(
-                    exchange=EXCHANGE_NAME,
-                    routing_key=routing_key,
-                    body=message,
-                    properties=pika.BasicProperties(
-                        delivery_mode=2,  # Make message persistent
-                        content_type='application/xml'
+                try:
+                    # Ensure the queue exists
+                    log_message(f"Declaring queue '{queue_name}'...")
+                    channel.queue_declare(queue=queue_name, durable=True)
+                    log_message(f"Queue '{queue_name}' declared")
+                    
+                    # Bind queue to exchange
+                    log_message(f"Binding queue '{queue_name}' to exchange '{EXCHANGE_NAME}' with routing key '{routing_key}'...")
+                    channel.queue_bind(exchange=EXCHANGE_NAME, queue=queue_name, routing_key=routing_key)
+                    log_message(f"Queue binding created")
+                    
+                    # Publish message
+                    log_message(f"Publishing message to exchange '{EXCHANGE_NAME}' with routing key '{routing_key}'...")
+                    channel.basic_publish(
+                        exchange=EXCHANGE_NAME,
+                        routing_key=routing_key,
+                        body=message,
+                        properties=pika.BasicProperties(
+                            delivery_mode=2,  # Make message persistent
+                            content_type='application/xml'
+                        )
                     )
-                )
-                log_message(f"Message published to queue: {queue} with routing key: {routing_key}")
+                    log_message(f"Message published to queue: {queue_name}")
+                    success_count += 1
+                    
+                except Exception as queue_error:
+                    log_message(f"Error publishing to queue '{queue_name}': {queue_error}")
             
             log_message("Closing RabbitMQ connection...")
             connection.close()
-            log_message("RabbitMQ connection closed. Successfully sent create message to all queues.")
-            return True
+            log_message(f"RabbitMQ connection closed. Successfully sent create message to {success_count} of {len(TARGET_QUEUES)} queues.")
+            return success_count > 0
             
         except pika.exceptions.AMQPConnectionError as e:
             error_msg = f"RabbitMQ connection error: {e}"
@@ -191,6 +197,30 @@ class ResPartner(models.Model):
         
         # Create the partner
         partner = super(ResPartner, self).create(vals)
+        
+        # Add partner ID to the recently created set
+        # Import the set from the update module
+        from odoo.addons.user_update.models.publisher_user_update import ResPartner as UpdateResPartner
+        UpdateResPartner._recently_created_partners.add(partner.id)
+        
+        log_message(f"Added partner ID {partner.id} to recently created set")
+        
+        # Schedule cleanup of the recently created set after 5 seconds
+        self.env.cr.execute("""
+            SELECT pg_sleep(5);
+            SELECT 1;
+        """)
+        
+        def cleanup_partner_id():
+            try:
+                UpdateResPartner._recently_created_partners.discard(partner.id)
+                log_message(f"Removed partner ID {partner.id} from recently created set")
+            except Exception as e:
+                log_message(f"Error cleaning up partner ID: {e}")
+        
+        # Use a thread for cleanup (this ensures we don't block the main thread)
+        import threading
+        threading.Timer(5, cleanup_partner_id).start()
         
         try:
             # Prepare partner data
