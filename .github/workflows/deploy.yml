@@ -43,7 +43,6 @@ jobs:
     steps:
       - name: Pull latest code and restart containers
         run: |
-          git pull origin Deployment
+          git pull --rebase origin Deployment
           docker compose down
-          docker system prune -af
           docker compose --env-file /home/ehbstudent/.env up -d
