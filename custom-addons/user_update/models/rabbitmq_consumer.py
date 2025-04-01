@@ -21,9 +21,10 @@ RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
 
 # Define which queues we want to consume
 SERVICE_QUEUES = [
-    'crm_user_update',
-    'facturatie_user_update',
-    'frontend_user_update'
+    'kassa_user_update',
+    # 'crm_user_update',
+    # 'facturatie_user_update',
+    # 'frontend_user_update'
 ]
 
 # Add this to make logs more visible
