@@ -7,24 +7,27 @@ import logging
 import xml.etree.ElementTree as ET
 import os
 from odoo import models, api, fields
-from odoo.service import common
 
 _logger = logging.getLogger(__name__)
 
-# Only use the variables that are already in docker-compose.yml
-RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq')
-RABBITMQ_USER = os.environ.get('RABBITMQ_USER', 'guest')
-RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD', 'guest')
+# RabbitMQ configuration - try environment variables with defaults
+RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST')
+RABBITMQ_USER = os.environ.get('RABBITMQ_USER')
+RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
+RABBITMQ_PORT = int(os.environ.get('RABBITMQ_PORT'))
+EXCHANGE_NAME = 'heartbeat'
+QUEUE_NAME = 'controlroom_heartbeat'
+HEARTBEAT_INTERVAL = 1
 
-# RabbitMQ exchange, queue, and routing key for the heartbeat
-EXCHANGE_NAME = 'controlroom.exchange'
-QUEUE_NAME = 'controlroom.heartbeat'
-ROUTING_KEY = 'controlroom.heartbeat.ping'
+# Global heartbeat thread
+heartbeat_thread = None
 
-# Module-level variables for singleton implementation
-_thread_lock = threading.Lock()
-_heartbeat_thread_instance = None
-_is_thread_running = False
+def log_message(message):
+    print(f"[HEARTBEAT_MODULE] {message}")
+    _logger.info(message)
+
+# Log configuration at module load time
+log_message(f"Module loaded with config: HOST={RABBITMQ_HOST}, EXCHANGE={EXCHANGE_NAME}, QUEUE={QUEUE_NAME}")
 
 class HeartbeatThread(threading.Thread):
     """Thread that sends a heartbeat to RabbitMQ at specified intervals."""
@@ -33,89 +36,79 @@ class HeartbeatThread(threading.Thread):
         super().__init__()
         self.daemon = True  # Ensures thread stops when Odoo stops
         self.running = True
-        self.connection = None
-        self.channel = None
-        self.instance_id = id(self)
-        _logger.info(f"HeartbeatThread instance created with ID: {self.instance_id}")
+        log_message("HeartbeatThread instance created")
 
     def run(self):
         """Sends heartbeat to RabbitMQ at regular intervals."""
-        global _is_thread_running
+        log_message("HeartbeatThread starting")
+        connection = None
         
-        try:
-            self._setup_connection()
-            _logger.info(f"HeartbeatThread starting with ID: {self.instance_id}")
-            _is_thread_running = True
-            
-            while self.running:
-                try:
+        while self.running:
+            try:
+                # Log connection attempt
+                log_message(f"Attempting to connect to RabbitMQ at {RABBITMQ_HOST}")
+                
+                # Create connection with credentials
+                credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD)
+                log_message(f"Connecting to RabbitMQ at {RABBITMQ_HOST}:{RABBITMQ_PORT}")
+                connection = pika.BlockingConnection(
+                    pika.ConnectionParameters(
+                        host=RABBITMQ_HOST,
+                        port=RABBITMQ_PORT,
+                        credentials=credentials,
+                    )
+                )
+                channel = connection.channel()
+
+                log_message("Connected to RabbitMQ successfully")
+                
+                # Setup exchange and queue
+                log_message(f"Creating exchange: {EXCHANGE_NAME} and queue: {QUEUE_NAME}")
+                channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type='fanout', durable=True)
+                channel.queue_declare(queue=QUEUE_NAME, durable=True)
+                channel.queue_bind(exchange=EXCHANGE_NAME, queue=QUEUE_NAME)
+                log_message("Exchange and queue setup complete")
+                
+                # Send heartbeat messages in a loop
+                while self.running:
                     current_time = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
                     heartbeat_msg = self.create_heartbeat_message()
                     
-                    # Publish to the specified exchange, queue, and routing key
-                    self.channel.basic_publish(
+                    log_message(f"Publishing heartbeat at {current_time}")
+                    channel.basic_publish(
                         exchange=EXCHANGE_NAME,
-                        routing_key=ROUTING_KEY,
+                        routing_key='heartbeat',
                         body=heartbeat_msg,
-                        properties=pika.BasicProperties(delivery_mode=2)  # Persistent messages
+                        properties=pika.BasicProperties(
+                            delivery_mode=2,  # Persistent messages
+                            content_type='application/xml'
+                        )
                     )
                     
-                    _logger.info(f"[HEARTBEAT] Sent heartbeat at {current_time}")
-                    time.sleep(0.5)  # Fixed interval of 0.5 seconds
-                except pika.exceptions.AMQPConnectionError:
-                    _logger.warning("Lost connection to RabbitMQ. Attempting to reconnect...")
-                    self._setup_connection()
-        except Exception as e:
-            _logger.error(f"Heartbeat thread error: {e}")
-        finally:
-            with _thread_lock:
-                _is_thread_running = False
-                global _heartbeat_thread_instance
-                if _heartbeat_thread_instance == self:
-                    _heartbeat_thread_instance = None
-            _logger.info(f"HeartbeatThread stopping with ID: {self.instance_id}")
-            self._close_connection()
-    
-    def _setup_connection(self):
-        """Establishes connection to RabbitMQ."""
-        credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD)
-        parameters = pika.ConnectionParameters(
-            host=RABBITMQ_HOST,
-            credentials=credentials,
-            connection_attempts=3,
-            retry_delay=5
-        )
+                    log_message(f"Heartbeat sent at {current_time}")
+                    time.sleep(HEARTBEAT_INTERVAL)
+                    
+            except pika.exceptions.AMQPConnectionError as e:
+                log_message(f"RabbitMQ connection error: {e}")
+                log_message(f"Will retry in 5 seconds...")
+                time.sleep(5)
+            except Exception as e:
+                log_message(f"Heartbeat error: {type(e).__name__} - {str(e)}")
+                log_message(f"Will retry in 5 seconds...")
+                time.sleep(5)  # Wait before trying again
+            finally:
+                try:
+                    if connection and connection.is_open:
+                        log_message("Closing connection")
+                        connection.close()
+                except Exception as e:
+                    log_message(f"Error closing connection: {e}")
         
-        self.connection = pika.BlockingConnection(parameters)
-        self.channel = self.connection.channel()
+        log_message("HeartbeatThread stopping")
         
-        # Declare the exchange
-        self.channel.exchange_declare(
-            exchange=EXCHANGE_NAME,
-            exchange_type='direct',
-            durable=True
-        )
-        
-        # Declare the queue
-        self.channel.queue_declare(queue=QUEUE_NAME, durable=True)
-        
-        # Bind the queue to the exchange with the routing key
-        self.channel.queue_bind(
-            exchange=EXCHANGE_NAME,
-            queue=QUEUE_NAME,
-            routing_key=ROUTING_KEY
-        )
-        
-        _logger.info(f"Connected to RabbitMQ at {RABBITMQ_HOST} and configured exchange/queue")
-    
-    def _close_connection(self):
-        """Safely closes the RabbitMQ connection."""
-        if self.connection and self.connection.is_open:
-            self.connection.close()
-            _logger.info("RabbitMQ connection closed")
-    
     def stop(self):
         """Stops the thread gracefully."""
+        log_message("Stop requested for heartbeat thread")
         self.running = False
         
     def create_heartbeat_message(self):
@@ -124,7 +117,7 @@ class HeartbeatThread(threading.Thread):
         
         # Add ServiceName element
         service_name = ET.SubElement(root, "ServiceName")
-        service_name.text = "Odoo_POS"
+        service_name.text = "Odoo_POS"  # Changed from Odoo_POS to Monitoring
         
         # Add Status element
         status = ET.SubElement(root, "Status")
@@ -134,12 +127,28 @@ class HeartbeatThread(threading.Thread):
         timestamp = ET.SubElement(root, "Timestamp")
         timestamp.text = datetime.datetime.utcnow().isoformat() + "Z"
         
-        # Add Host
-        host = ET.SubElement(root, "Host")
-        host.text = socket.gethostname()
+        # Add HeartBeatInterval element
+        heartbeat_interval = ET.SubElement(root, "HeartBeatInterval")
+        heartbeat_interval.text = "{HEARTBEAT_INTERVAL}"
+        
+        # Add Metadata element with nested elements
+        metadata = ET.SubElement(root, "Metadata")
+        
+        # Add Version element under Metadata
+        version = ET.SubElement(metadata, "Version")
+        version.text = "1.0.0"
+        
+        # Add Host element under Metadata
+        host = ET.SubElement(metadata, "Host")
+        host.text = "Azure_VM"
+        
+        # Add Environment element under Metadata
+        environment = ET.SubElement(metadata, "Environment")
+        environment.text = "production"
         
         # Convert to string and return
-        return ET.tostring(root, encoding="utf-8", method="xml").decode()
+        xml_message = ET.tostring(root, encoding="utf-8", method="xml").decode()
+        return xml_message
 
 
 class RabbitMQHeartbeat(models.AbstractModel):
@@ -149,46 +158,33 @@ class RabbitMQHeartbeat(models.AbstractModel):
     @api.model
     def start_heartbeat(self):
         """Start the heartbeat thread if it's not already running."""
-        global _thread_lock, _heartbeat_thread_instance, _is_thread_running
+        global heartbeat_thread
         
-        with _thread_lock:
-            # Check if the thread is already running
-            if _is_thread_running:
-                _logger.info("Heartbeat thread is already running")
-                return False
-                
-            # Create and start a new thread
-            _heartbeat_thread_instance = HeartbeatThread()
-            _logger.info("Starting heartbeat service...")
-            _heartbeat_thread_instance.start()
+        log_message("Request to start heartbeat service")
+        
+        if not heartbeat_thread or not heartbeat_thread.is_alive():
+            log_message("Starting new heartbeat thread")
+            heartbeat_thread = HeartbeatThread()
+            heartbeat_thread.start()
             return True
+        else:
+            log_message("Heartbeat thread is already running")
+            return False
 
     @api.model
     def stop_heartbeat(self):
         """Stop the heartbeat thread."""
-        global _thread_lock, _heartbeat_thread_instance
+        global heartbeat_thread
         
-        with _thread_lock:
-            if _heartbeat_thread_instance and _heartbeat_thread_instance.is_alive():
-                _logger.info(f"Stopping heartbeat service...")
-                _heartbeat_thread_instance.stop()
-                return True
-            return False
+        log_message("Request to stop heartbeat service")
         
-    @api.model
-    def reset_heartbeat(self):
-        """Reset the heartbeat state (for testing/debugging)."""
-        global _thread_lock, _heartbeat_thread_instance, _is_thread_running
-        
-        with _thread_lock:
-            if _heartbeat_thread_instance:
-                if _heartbeat_thread_instance.is_alive():
-                    _heartbeat_thread_instance.stop()
-                _heartbeat_thread_instance = None
-                _is_thread_running = False
-                _logger.info("Heartbeat thread has been reset")
-                return True
-            return False
+        if heartbeat_thread and heartbeat_thread.is_alive():
+            log_message("Stopping active heartbeat thread")
+            heartbeat_thread.stop()
+            return True
+        log_message("No active heartbeat thread to stop")
+        return False
+
 
 class RabbitMQHeartbeatStartup(models.AbstractModel):
     _name = "rabbitmq.heartbeat.startup"
@@ -197,6 +193,8 @@ class RabbitMQHeartbeatStartup(models.AbstractModel):
     @api.model
     def _register_hook(self):
         """Start the heartbeat thread at Odoo startup."""
+        log_message("Initializing heartbeat service at Odoo startup")
         # Add a small delay to prevent module reload issues
         self._cr.execute("SELECT pg_sleep(2)")
+        log_message("Starting heartbeat service after delay")
         self.env['rabbitmq.heartbeat'].start_heartbeat()
