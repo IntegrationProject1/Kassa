@@ -88,15 +88,16 @@ class RabbitMQPublisher(models.AbstractModel):
         return xml_string
     
     def publish_user_delete(self, user_id):
-        """Publish user deletion message only to the kassa_user_delete queue"""
+        """Publish user deletion message to all other service queues"""
         try:
             log_message(f"Publishing user deletion message for user_id: {user_id}")
             
-            # Alleen publiceren naar kassa_user_delete
-            queue_name = 'kassa_user_delete'
-            routing_key = 'kassa.user.delete'
-            
-            log_message(f"Will publish to queue: {queue_name} with routing key: {routing_key}")
+            # Publish to all other service queues
+            target_queues = [
+                {'queue': 'crm_user_delete', 'routing_key': 'crm.user.delete'},
+                {'queue': 'facturatie_user_delete', 'routing_key': 'facturatie.user.delete'},
+                {'queue': 'frontend_user_delete', 'routing_key': 'frontend.user.delete'}
+            ]
             
             # Create the message
             message = self.create_user_delete_message(user_id)
@@ -110,37 +111,45 @@ class RabbitMQPublisher(models.AbstractModel):
             channel = connection.channel()
             log_message("RabbitMQ channel created")
             
-            # Use existing exchange without trying to declare it again
+            # Use existing exchange
             exchange_name = 'user'
-            log_message(f"Using existing exchange '{exchange_name}' (type: topic)...")
+            success_count = 0
             
-            # Ensure the queue exists
-            log_message(f"Declaring queue '{queue_name}'...")
-            channel.queue_declare(queue=queue_name, durable=True)
-            log_message(f"Queue '{queue_name}' declared")
-            
-            # Bind queue to exchange with the correct routing key
-            log_message(f"Binding queue '{queue_name}' to exchange '{exchange_name}' with routing key '{routing_key}'...")
-            channel.queue_bind(exchange=exchange_name, queue=queue_name, routing_key=routing_key)
-            log_message(f"Queue binding created")
-            
-            # Publish message with the correct routing key
-            log_message(f"Publishing message to exchange '{exchange_name}' with routing key '{routing_key}'...")
-            channel.basic_publish(
-                exchange=exchange_name,
-                routing_key=routing_key,
-                body=message,
-                properties=pika.BasicProperties(
-                    delivery_mode=2,  # Make message persistent
-                    content_type='application/xml'
-                )
-            )
-            log_message(f"Message published to exchange: {exchange_name} with routing key: {routing_key}")
+            # Publish to each queue
+            for target in target_queues:
+                queue_name = target['queue']
+                routing_key = target['routing_key']
+                
+                try:
+                    # Ensure the queue exists
+                    log_message(f"Declaring queue '{queue_name}'...")
+                    channel.queue_declare(queue=queue_name, durable=True)
+                    
+                    # Bind queue to exchange with the correct routing key
+                    log_message(f"Binding queue '{queue_name}' to exchange '{exchange_name}' with routing key '{routing_key}'...")
+                    channel.queue_bind(exchange=exchange_name, queue=queue_name, routing_key=routing_key)
+                    
+                    # Publish message with the correct routing key
+                    log_message(f"Publishing message to exchange '{exchange_name}' with routing key '{routing_key}'...")
+                    channel.basic_publish(
+                        exchange=exchange_name,
+                        routing_key=routing_key,
+                        body=message,
+                        properties=pika.BasicProperties(
+                            delivery_mode=2,  # Make message persistent
+                            content_type='application/xml'
+                        )
+                    )
+                    log_message(f"Message published to queue: {queue_name}")
+                    success_count += 1
+                    
+                except Exception as queue_error:
+                    log_message(f"Error publishing to queue '{queue_name}': {queue_error}")
             
             log_message("Closing RabbitMQ connection...")
             connection.close()
-            log_message(f"RabbitMQ connection closed. Successfully sent message to {queue_name}.")
-            return True
+            log_message(f"RabbitMQ connection closed. Successfully sent message to {success_count} of {len(target_queues)} queues.")
+            return success_count > 0
             
         except pika.exceptions.AMQPConnectionError as e:
             error_msg = f"RabbitMQ connection error: {e}"

@@ -21,10 +21,11 @@ RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
 
 # Definieer welke queues we willen consumeren
 SERVICE_QUEUES = [
-    'crm_user_delete',
-    'facturatie_user_delete',
-    'frontend_user_delete'
-    # kassa_user_delete is bewust uitgesloten
+    'kassa_user_delete'
+    # De andere queues worden nu niet meer beluisterd
+    # 'crm_user_delete',
+    # 'facturatie_user_delete',
+    # 'frontend_user_delete'
 ]
 
 # Add XSD schema as a constant
