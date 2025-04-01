@@ -1,3 +1,3 @@
 from . import rabbitmq_consumer
-from . import user_update
+from . import publisher_user_update
 
