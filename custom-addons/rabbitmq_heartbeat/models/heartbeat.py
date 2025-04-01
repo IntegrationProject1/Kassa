@@ -16,7 +16,7 @@ RABBITMQ_USER = os.environ.get('RABBITMQ_USER')
 RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
 RABBITMQ_PORT = int(os.environ.get('RABBITMQ_PORT'))
 EXCHANGE_NAME = 'heartbeat'
-QUEUE_NAME = 'controlroom_heartbeat'
+QUEUE_NAME = 'controlroom.heartbeat.ping'
 HEARTBEAT_INTERVAL = 1
 
 # Global heartbeat thread
