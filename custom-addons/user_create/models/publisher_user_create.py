@@ -91,23 +91,20 @@ class ResPartner(models.Model):
         # Create the root element
         root = ET.Element("UserMessage")
         
-        # Add regular elements
-        for key, value in partner_data.items():
-            if key == 'Business':
-                continue  # Handle business separately
-            if value is not None and value != '':
-                child = ET.SubElement(root, key)
-                child.text = str(value)
+        # Add regular elements, including empty fields
+        for key in ['ActionType', 'UserID', 'TimeOfAction', 'FirstName', 'LastName', 'PhoneNumber', 'EmailAddress']:
+            child = ET.SubElement(root, key)
+            child.text = str(partner_data.get(key, ''))  # Set to empty string if key is not present
         
         # Add business element if present
-        if 'Business' in partner_data and partner_data['Business']:
-            business_element = ET.SubElement(root, "Business")
-            business_data = partner_data['Business']
-            
-            for bus_key, bus_value in business_data.items():
-                if bus_value is not None and bus_value != '':
-                    bus_child = ET.SubElement(business_element, bus_key)
-                    bus_child.text = str(bus_value)
+        business_element = ET.SubElement(root, "Business")
+        
+        # Define business fields
+        business_fields = ['BusinessName', 'BusinessEmail', 'RealAddress', 'BTWNumber', 'FacturationAddress']
+        
+        for bus_key in business_fields:
+            bus_child = ET.SubElement(business_element, bus_key)
+            bus_child.text = str(partner_data.get('Business', {}).get(bus_key, ''))  # Set to empty string if key is not present
         
         # Convert to XML string
         xml_string = ET.tostring(root, encoding='utf-8', method='xml').decode('utf-8')
@@ -118,6 +115,8 @@ class ResPartner(models.Model):
             log_message("Generated XML does not conform to XSD schema")
             
         return xml_string
+
+
     
     def publish_user_create(self, partner_data):
         """Publish user create message to other service queues"""
