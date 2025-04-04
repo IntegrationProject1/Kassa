@@ -38,7 +38,7 @@ XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
                 <xs:element name="ActionType" type="xs:string"/>
                 <xs:element name="UUID" type="xs:int"/>
                 <xs:element name="TimeOfAction" type="xs:dateTime"/>
-                <xs:element name="Password" type="xs:string" minOccurs="0"/>
+                <xs:element name="EncryptedPassword" type="xs:string" minOccurs="0"/>
                 <xs:element name="FirstName" type="xs:string" minOccurs="0"/>
                 <xs:element name="LastName" type="xs:string" minOccurs="0"/>
                 <xs:element name="PhoneNumber" type="xs:string" minOccurs="0"/>
