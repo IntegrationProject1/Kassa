@@ -313,35 +313,36 @@ class CustomerUpdateThread(threading.Thread):
             all_customers = partner_model.search([('customer_rank', '>', 0)], limit=10)
             log_message(f"First 10 customers in the system:")
             for i, customer in enumerate(all_customers):
-                log_message(f"  Customer {i+1}: ID={customer.id}, Name={customer.name}, Email={customer.email}")
+                log_message(f"  Customer {i+1}: ID={customer.id}, Name={customer.name}, Email={customer.email}, External ID={customer.external_id}")
             
             # Try to find the customer by ID or email
             customer_id = customer_data.get('customer_id')
-            log_message(f"Looking for customer with ID/email: {customer_id}")
+            log_message(f"Looking for customer with ID/email/external_id: {customer_id}")
             
-            # First try email match
-            customers = partner_model.search([('email', '=', customer_id)])
-            if not customers:
-                # Try to find by database ID if customer_id is numeric
-                if customer_id.isdigit():
-                    customers = partner_model.browse([int(customer_id)])
-                    if customers.exists():
-                        log_message(f"Found customer by database ID: {customer_id}")
-                    else:
-                        customers = False
+            # First, try to find by external_id (highest priority)
+            customer_by_external_id = partner_model.search([
+                ('external_id', '=', customer_id)
+            ], limit=1)
             
-            log_message(f"Found {len(customers) if customers else 0} customers with ID/email {customer_id}")
+            customer = partner_model.search([('external_id', '=', customer_id)], limit=1)
+            if customer:
+                log_message(f"Found customer by external_id={customer_id}: ID={customer.id}, Name={customer.name}")
+            else:
+                log_message(f"No customer found with external_id={customer_id}")
             
             if customer_data.get('action_type') == 'UPDATE':
-                if not customers:
+                if not customer:
                     log_message(f"Customer with ID {customer_id} not found for update")
                     return False
                     
-                log_message(f"Updating customer with ID {customer_id}, database ID: {customers[0].id}")
-                customer = customers[0]
-                update_vals = {}
+                log_message(f"Updating customer with ID {customer_id}, database ID: {customer.id}, external_id: {customer.external_id}")
                 
-                # Update customer fields
+                # Always ensure external_id is set when updating by it
+                update_vals = {}
+                if customer_by_external_id and not customer.external_id:
+                    update_vals['external_id'] = customer_id
+                    log_message(f"Setting missing external_id to {customer_id}")
+                    
                 if 'first_name' in customer_data or 'last_name' in customer_data:
                     first_name = customer_data.get('first_name', '')
                     last_name = customer_data.get('last_name', '')

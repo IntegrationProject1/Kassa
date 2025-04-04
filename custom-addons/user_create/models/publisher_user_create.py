@@ -72,6 +72,10 @@ class ResPartner(models.Model):
     # Track recently created partner IDs to prevent duplicate notifications
     _recently_created_ids = set()
     
+    external_id = fields.Char(string="External ID", 
+                            help="External identifier for integration with other systems",
+                            index=True)
+    
     def _get_rabbitmq_connection_params(self):
         """Get RabbitMQ connection parameters from environment variables"""
         credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD)
@@ -186,8 +190,22 @@ class ResPartner(models.Model):
         """Override the create method to send customer data to RabbitMQ."""
         log_message("Creating a new partner...")
         
-        # Pre-register in our tracking sets BEFORE creating the partner
-        # This helps prevent updates during creation
+        # Generate an auto-incremented external_id if this is a customer
+        if vals.get('customer_rank', 0) > 0 and not vals.get('external_id'):
+            # Find the highest existing external_id that is numeric
+            last_id = 0
+            partners_with_ext_id = self.search([('external_id', '!=', False)])
+            for partner in partners_with_ext_id:
+                try:
+                    ext_id_num = int(partner.external_id)
+                    if ext_id_num > last_id:
+                        last_id = ext_id_num
+                except (ValueError, TypeError):
+                    pass  # Skip non-numeric external_ids
+            
+            # Set the next external_id
+            vals['external_id'] = str(last_id + 1)
+            log_message(f"Generated new external_id: {vals['external_id']}")
         
         # Set a context flag for the child write operations
         ctx = dict(self.env.context, creating_new_partner=True)
@@ -229,7 +247,7 @@ class ResPartner(models.Model):
             # Prepare customer data
             partner_data = {
                 'ActionType': 'CREATE',
-                'UserID': str(partner.id),
+                'UserID': partner.external_id or str(partner.id),  # Use external_id if available, otherwise fall back to internal ID
                 'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
                 'FirstName': partner.name.split(' ')[0] if partner.name else '',
                 'LastName': ' '.join(partner.name.split(' ')[1:]) if partner.name and ' ' in partner.name else '',
@@ -259,3 +277,28 @@ class ResPartner(models.Model):
             log_message(f"Error preparing or sending customer create message: {e}")
         
         return partner
+    
+    def write(self, vals):
+        """Override the write method to send customer data updates to RabbitMQ"""
+        # If customer_rank is being set to > 0 and there's no external_id, generate one
+        if vals.get('customer_rank', 0) > 0:
+            for record in self.filtered(lambda r: not r.external_id):
+                # Find the highest existing external_id that is numeric
+                last_id = 0
+                partners_with_ext_id = self.search([('external_id', '!=', False)])
+                for partner in partners_with_ext_id:
+                    try:
+                        ext_id_num = int(partner.external_id)
+                        if ext_id_num > last_id:
+                            last_id = ext_id_num
+                    except (ValueError, TypeError):
+                        pass  # Skip non-numeric external_ids
+                
+                # Set the next external_id
+                if 'external_id' not in vals:
+                    vals['external_id'] = str(last_id + 1)
+                    log_message(f"Generated new external_id on update: {vals['external_id']}")
+
+        result = super(ResPartner, self).write(vals)
+        # Rest of your existing write method code...
+        return result

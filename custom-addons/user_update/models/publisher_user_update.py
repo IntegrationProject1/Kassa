@@ -195,6 +195,25 @@ class ResPartner(models.Model):
             log_message("Skipping RabbitMQ message due to context flag")
             return super(ResPartner, self).write(vals)
         
+        # If this is a customer and we're adding customer_rank but there's no external_id, generate one
+        if vals.get('customer_rank', 0) > 0:
+            for record in self.filtered(lambda r: not r.external_id):
+                # Find the highest existing external_id that is numeric
+                last_id = 0
+                partners_with_ext_id = self.search([('external_id', '!=', False)])
+                for partner in partners_with_ext_id:
+                    try:
+                        ext_id_num = int(partner.external_id)
+                        if ext_id_num > last_id:
+                            last_id = ext_id_num
+                    except (ValueError, TypeError):
+                        pass  # Skip non-numeric external_ids
+                
+                # Set the next external_id
+                if 'external_id' not in vals:
+                    vals['external_id'] = str(last_id + 1)
+                    log_message(f"Generated new external_id on update: {vals['external_id']}")
+        
         # Check if any of these partners were recently created
         partners_to_skip = []
         partners_to_process = []
@@ -225,7 +244,7 @@ class ResPartner(models.Model):
                 # Basic customer data
                 partner_data = {
                     'ActionType': 'UPDATE',
-                    'UserID': str(partner.id),
+                    'UserID': partner.external_id or str(partner.id),  # Use external_id if available
                     'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
                     'FirstName': partner.name.split(' ')[0] if partner.name else '',
                     'LastName': ' '.join(partner.name.split(' ')[1:]) if partner.name and ' ' in partner.name else '',

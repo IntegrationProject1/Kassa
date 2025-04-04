@@ -319,6 +319,7 @@ class CustomerCreateThread(threading.Thread):
                     'email': customer_data.get('email_address'),
                     'phone': customer_data.get('phone_number'),
                     'customer_rank': 1,  # Set as customer
+                    'external_id': customer_id,  # Store the UserID as external_id
                 }
                 
                 # Add company details if available
@@ -357,21 +358,24 @@ class CustomerCreateThread(threading.Thread):
                     numeric_id = -1
                     log_message(f"Customer ID is not numeric, using email lookup")
                 
-                # Find customer by ID or email
+                # Find customer by ID or email or external_id
                 customer = partner_model.search([
-                    '|',
+                    '|', '|',
                     ('id', '=', numeric_id),
-                    ('email', '=', customer_id)
+                    ('email', '=', customer_id),
+                    ('external_id', '=', customer_id)
                 ], limit=1)
                 
                 if not customer:
-                    log_message(f"Customer not found with ID/email: {customer_id}")
+                    log_message(f"Customer not found with ID/email/external_id: {customer_id}")
                     return False
                     
                 log_message(f"Found customer: {customer.name} (ID: {customer.id})")
                 
                 # Prepare update values
-                update_vals = {}
+                update_vals = {
+                    'external_id': customer_id,  # Always update external_id to ensure it's set
+                }
                 if 'first_name' in customer_data or 'last_name' in customer_data:
                     first = customer_data.get('first_name', '')
                     last = customer_data.get('last_name', '')
@@ -466,6 +470,14 @@ class RabbitMQCustomerCreateStartup(models.AbstractModel):
     def _register_hook(self):
         """Start the service on Odoo startup"""
         self.env['rabbitmq.customer.create'].start_service()
+
+
+class ResPartner(models.Model):
+    _inherit = 'res.partner'
+    
+    external_id = fields.Char(string="External ID", 
+                             help="External identifier for integration with other systems",
+                             index=True)
         
         
 """om te testen of het werkt kan je dit in rabbitmq zetten (gegevens wel aanpassen): 

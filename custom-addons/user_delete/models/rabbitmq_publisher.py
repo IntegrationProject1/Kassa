@@ -62,7 +62,7 @@ class RabbitMQPublisher(models.AbstractModel):
             log_message(f"XML validation error: {e}")
             return False
     
-    def create_customer_delete_message(self, customer_id):
+    def create_customer_delete_message(self, customer_id, external_id=None):
         """Create XML message for customer deletion"""
         # Create the root element
         root = ET.Element("UserMessage")
@@ -72,7 +72,8 @@ class RabbitMQPublisher(models.AbstractModel):
         action_type.text = "DELETE"
         
         user_id_elem = ET.SubElement(root, "UserID")
-        user_id_elem.text = str(customer_id)
+        # Use external_id if available, otherwise use customer_id
+        user_id_elem.text = str(external_id) if external_id else str(customer_id)
         
         time_of_action = ET.SubElement(root, "TimeOfAction")
         time_of_action.text = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -87,10 +88,11 @@ class RabbitMQPublisher(models.AbstractModel):
             
         return xml_string
     
-    def publish_customer_delete(self, customer_id):
+    def publish_customer_delete(self, customer_id, external_id=None):
         """Publish customer deletion message to all other service queues"""
         try:
-            log_message(f"Publishing customer deletion message for customer_id: {customer_id}")
+            identifier = external_id if external_id else customer_id
+            log_message(f"Publishing customer deletion message for customer identifier: {identifier}")
             
             # Update target queues to be customer-focused
             target_queues = [
@@ -100,7 +102,7 @@ class RabbitMQPublisher(models.AbstractModel):
             ]
             
             # Create the message
-            message = self.create_customer_delete_message(customer_id)
+            message = self.create_customer_delete_message(customer_id, external_id)
             log_message("Message created successfully")
             
             # Connect to RabbitMQ
@@ -167,20 +169,24 @@ class ResPartner(models.Model):
     
     def unlink(self):
         """Override unlink to publish customer deletion events"""
-        # Store IDs of customers to be deleted
-        customer_ids = []
+        # Store IDs and external IDs of customers to be deleted
+        customers_to_delete = []
         
         for partner in self:
             if partner.customer_rank > 0:  # Only process actual customers
-                customer_ids.append(partner.id)
+                customers_to_delete.append({
+                    'id': partner.id,
+                    'external_id': partner.external_id
+                })
+                log_message(f"Will delete customer {partner.id} with external_id: {partner.external_id}")
         
         # Call the original unlink method
         result = super(ResPartner, self).unlink()
         
         # Now publish the deletion messages
-        if customer_ids:
+        if customers_to_delete:
             publisher = self.env['customer.delete.rabbitmq.publisher']
-            for customer_id in customer_ids:
-                publisher.publish_customer_delete(customer_id)
+            for customer in customers_to_delete:
+                publisher.publish_customer_delete(customer['id'], customer['external_id'])
                 
         return result

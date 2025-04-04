@@ -253,7 +253,7 @@ class UserDeleteThread(threading.Thread):
                     user_id_value = user_id.text.strip()
                     log_message(f"Processing delete request for user ID: {user_id_value}")
                     
-                    # Find the customer - search for numeric ID or email
+                    # Find the customer - search for numeric ID, email, or external_id
                     # Convert to integer if it's a number
                     try:
                         numeric_id = int(user_id_value)
@@ -262,20 +262,21 @@ class UserDeleteThread(threading.Thread):
                         numeric_id = -1
                         log_message(f"Customer ID is not numeric, using -1 for numeric search")
                         
-                    log_message(f"Searching for customer with ID {numeric_id} or email {user_id_value}")
+                    log_message(f"Searching for customer with ID {numeric_id} or email {user_id_value} or external_id {user_id_value}")
                     
                     # Diagnostic - verify customers exist in database
-                    all_customers = env['res.partner'].sudo().search_read([('customer_rank', '>', 0)], ['id', 'name', 'email'])
-                    log_message(f"Found {len(all_customers)} customers in database. First few: {all_customers[:10]}")
+                    all_customers = env['res.partner'].sudo().search_read([('customer_rank', '>', 0)], ['id', 'name', 'email', 'external_id'])
+                    log_message(f"Found {len(all_customers)} customers in database. First few: {all_customers[:5]}")
                     
                     customer = env['res.partner'].sudo().search([
-                        '|', 
+                        '|', '|', 
                         ('id', '=', numeric_id),
-                        ('email', '=', user_id_value)
+                        ('email', '=', user_id_value),
+                        ('external_id', '=', user_id_value)
                     ], limit=1)
                     
                     if not customer:
-                        log_message(f"Customer not found for ID/email: {user_id_value}")
+                        log_message(f"Customer not found for ID/email/external_id: {user_id_value}")
                         return False
                     
                     # Don't delete admin users
