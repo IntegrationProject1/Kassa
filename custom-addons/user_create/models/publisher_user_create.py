@@ -53,13 +53,24 @@ USER_CREATE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
 
 def log_message(message):
     """Standard logging function"""
-    print(f"[USER_CREATE_MODULE] {message}")
+    print(f"[CUSTOMER_CREATE_MODULE] {message}")
     _logger.info(message)
 
-log_message("RabbitMQ User Create Publisher loaded")
+log_message("RabbitMQ Customer Create Publisher loaded")
+
+# Create a shared prevention registry to avoid circular imports
+class PreventionRegistry:
+    """Static registry to track recently created partner IDs"""
+    recently_created_partners = set()
+
+# Create global instance
+prevention_registry = PreventionRegistry()
 
 class ResPartner(models.Model):
     _inherit = 'res.partner'
+    
+    # Track recently created partner IDs to prevent duplicate notifications
+    _recently_created_ids = set()
     
     def _get_rabbitmq_connection_params(self):
         """Get RabbitMQ connection parameters from environment variables"""
@@ -86,25 +97,27 @@ class ResPartner(models.Model):
             log_message(f"XML validation error: {e}")
             return False
     
-    def create_user_create_message(self, partner_data):
-        """Create XML message for user creation with support for nested elements"""
-        # Create the root element
-        root = ET.Element("UserMessage")
+    def create_customer_create_message(self, partner_data):
+        """Create XML message for customer creation"""
+        root = ET.Element("UserMessage")  # Keep as UserMessage per XSD schema
         
-        # Add regular elements, including empty fields
-        for key in ['ActionType', 'UserID', 'TimeOfAction', 'FirstName', 'LastName', 'PhoneNumber', 'EmailAddress']:
-            child = ET.SubElement(root, key)
-            child.text = str(partner_data.get(key, ''))  # Set to empty string if key is not present
+        # Add regular elements
+        for key, value in partner_data.items():
+            if key == 'Business':
+                continue  # Handle business separately
+            if value is not None:
+                child = ET.SubElement(root, key)
+                child.text = str(value)
         
         # Add business element if present
-        business_element = ET.SubElement(root, "Business")
-        
-        # Define business fields
-        business_fields = ['BusinessName', 'BusinessEmail', 'RealAddress', 'BTWNumber', 'FacturationAddress']
-        
-        for bus_key in business_fields:
-            bus_child = ET.SubElement(business_element, bus_key)
-            bus_child.text = str(partner_data.get('Business', {}).get(bus_key, ''))  # Set to empty string if key is not present
+        if 'Business' in partner_data and partner_data['Business']:
+            business_element = ET.SubElement(root, "Business")
+            business_data = partner_data['Business']
+            
+            for bus_key, bus_value in business_data.items():
+                if bus_value is not None and bus_value != '':
+                    bus_child = ET.SubElement(business_element, bus_key)
+                    bus_child.text = str(bus_value)
         
         # Convert to XML string
         xml_string = ET.tostring(root, encoding='utf-8', method='xml').decode('utf-8')
@@ -115,31 +128,22 @@ class ResPartner(models.Model):
             log_message("Generated XML does not conform to XSD schema")
             
         return xml_string
-
-
     
-    def publish_user_create(self, partner_data):
-        """Publish user create message to other service queues"""
+    def publish_customer_create(self, partner_data):
+        """Publish customer create message to other service queues"""
         try:
-            user_id = partner_data.get('UserID')
-            log_message(f"Publishing user create message for user_id: {user_id}")
+            customer_id = partner_data.get('UserID')
+            log_message(f"Publishing customer create message for customer_id: {customer_id}")
             
             # Create the message
-            message = self.create_user_create_message(partner_data)
-            log_message(f"Message created successfully: {message}")
+            message = self.create_customer_create_message(partner_data)
             
             # Connect to RabbitMQ
-            log_message(f"Connecting to RabbitMQ at {RABBITMQ_HOST}:{RABBITMQ_PORT}...")
             connection = pika.BlockingConnection(self._get_rabbitmq_connection_params())
-            log_message("RabbitMQ connection established")
-            
             channel = connection.channel()
-            log_message("RabbitMQ channel created")
             
             # Ensure the exchange exists
-            log_message(f"Declaring exchange '{EXCHANGE_NAME}'...")
             channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type='topic', durable=True)
-            log_message(f"Exchange '{EXCHANGE_NAME}' declared")
             
             # Publish to each target queue
             success_count = 0
@@ -149,17 +153,12 @@ class ResPartner(models.Model):
                 
                 try:
                     # Ensure the queue exists
-                    log_message(f"Declaring queue '{queue_name}'...")
                     channel.queue_declare(queue=queue_name, durable=True)
-                    log_message(f"Queue '{queue_name}' declared")
                     
                     # Bind queue to exchange
-                    log_message(f"Binding queue '{queue_name}' to exchange '{EXCHANGE_NAME}' with routing key '{routing_key}'...")
                     channel.queue_bind(exchange=EXCHANGE_NAME, queue=queue_name, routing_key=routing_key)
-                    log_message(f"Queue binding created")
                     
                     # Publish message
-                    log_message(f"Publishing message to exchange '{EXCHANGE_NAME}' with routing key '{routing_key}'...")
                     channel.basic_publish(
                         exchange=EXCHANGE_NAME,
                         routing_key=routing_key,
@@ -175,54 +174,59 @@ class ResPartner(models.Model):
                 except Exception as queue_error:
                     log_message(f"Error publishing to queue '{queue_name}': {queue_error}")
             
-            log_message("Closing RabbitMQ connection...")
             connection.close()
-            log_message(f"RabbitMQ connection closed. Successfully sent create message to {success_count} of {len(TARGET_QUEUES)} queues.")
             return success_count > 0
             
-        except pika.exceptions.AMQPConnectionError as e:
-            error_msg = f"RabbitMQ connection error: {e}"
-            log_message(error_msg)
-            return False
         except Exception as e:
-            error_msg = f"Failed to publish user create message: {e}"
-            log_message(error_msg)
+            log_message(f"Failed to publish customer create message: {e}")
             return False
     
     @api.model
     def create(self, vals):
-        """Override the create method to send user data to RabbitMQ."""
+        """Override the create method to send customer data to RabbitMQ."""
         log_message("Creating a new partner...")
         
-        # Create the partner
-        partner = super(ResPartner, self).create(vals)
+        # Pre-register in our tracking sets BEFORE creating the partner
+        # This helps prevent updates during creation
         
-        # Add partner ID to the recently created set
-        # Import the set from the update module
-        from odoo.addons.user_update.models.publisher_user_update import ResPartner as UpdateResPartner
-        UpdateResPartner._recently_created_partners.add(partner.id)
+        # Set a context flag for the child write operations
+        ctx = dict(self.env.context, creating_new_partner=True)
         
-        log_message(f"Added partner ID {partner.id} to recently created set")
+        # Create the partner with our special context
+        partner = super(ResPartner, self.with_context(ctx)).create(vals)
         
-        # Schedule cleanup of the recently created set after 5 seconds
-        self.env.cr.execute("""
-            SELECT pg_sleep(5);
-            SELECT 1;
-        """)
+        # Check if we should skip publishing (when created from RabbitMQ)
+        if self.env.context.get('skip_rabbitmq_publish'):
+            log_message(f"Skipping RabbitMQ publish for partner {partner.id} (created from RabbitMQ)")
+            return partner
         
-        def cleanup_partner_id():
-            try:
-                UpdateResPartner._recently_created_partners.discard(partner.id)
-                log_message(f"Removed partner ID {partner.id} from recently created set")
-            except Exception as e:
-                log_message(f"Error cleaning up partner ID: {e}")
+        # CRITICAL: Only send messages for actual customers
+        if not partner.customer_rank > 0:
+            log_message(f"Partner {partner.id} is not a customer (customer_rank={partner.customer_rank}), skipping message")
+            return partner
         
-        # Use a thread for cleanup (this ensures we don't block the main thread)
+        # Add to both prevention registries
+        self._recently_created_ids.add(partner.id)
+        prevention_registry.recently_created_partners.add(partner.id)
+        log_message(f"Added customer ID {partner.id} to prevention registry")
+        
+        # Use threading instead of pg_sleep which can block database
         import threading
-        threading.Timer(5, cleanup_partner_id).start()
+        def cleanup_ids():
+            try:
+                # Clean up both sets
+                if partner.id in self._recently_created_ids:
+                    self._recently_created_ids.discard(partner.id)
+                prevention_registry.recently_created_partners.discard(partner.id)
+                log_message(f"Removed customer ID {partner.id} from prevention registry")
+            except Exception as e:
+                log_message(f"Error in cleanup: {e}")
+        
+        # Schedule cleanup after 10 seconds
+        threading.Timer(10.0, cleanup_ids).start()
         
         try:
-            # Prepare partner data
+            # Prepare customer data
             partner_data = {
                 'ActionType': 'CREATE',
                 'UserID': str(partner.id),
@@ -248,12 +252,10 @@ class ResPartner(models.Model):
                 if any(business_data.values()):
                     partner_data['Business'] = business_data
 
-            log_message(f"Partner data prepared: {partner_data}")
-            
             # Send the RabbitMQ message
-            self.publish_user_create(partner_data)
+            self.publish_customer_create(partner_data)
             
         except Exception as e:
-            log_message(f"Error preparing or sending user create message: {e}")
+            log_message(f"Error preparing or sending customer create message: {e}")
         
         return partner

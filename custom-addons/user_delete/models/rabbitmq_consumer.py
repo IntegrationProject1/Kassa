@@ -253,58 +253,58 @@ class UserDeleteThread(threading.Thread):
                     user_id_value = user_id.text.strip()
                     log_message(f"Processing delete request for user ID: {user_id_value}")
                     
-                    # Find the user - search for numeric ID or login (email)
+                    # Find the customer - search for numeric ID or email
                     # Convert to integer if it's a number
                     try:
                         numeric_id = int(user_id_value)
-                        log_message(f"Converted user ID to numeric: {numeric_id}")
+                        log_message(f"Converted customer ID to numeric: {numeric_id}")
                     except (ValueError, TypeError):
                         numeric_id = -1
-                        log_message(f"User ID is not numeric, using -1 for numeric search")
+                        log_message(f"Customer ID is not numeric, using -1 for numeric search")
                         
-                    log_message(f"Searching for user with ID {numeric_id} or login {user_id_value}")
+                    log_message(f"Searching for customer with ID {numeric_id} or email {user_id_value}")
                     
-                    # Diagnostic - verify users exist in database
-                    all_users = env['res.users'].sudo().search_read([('id', '>', 0)], ['id', 'name', 'login'])
-                    log_message(f"Found {len(all_users)} users in database. First few: {all_users[:10]}")
+                    # Diagnostic - verify customers exist in database
+                    all_customers = env['res.partner'].sudo().search_read([('customer_rank', '>', 0)], ['id', 'name', 'email'])
+                    log_message(f"Found {len(all_customers)} customers in database. First few: {all_customers[:10]}")
                     
-                    user = env['res.users'].sudo().search([
+                    customer = env['res.partner'].sudo().search([
                         '|', 
                         ('id', '=', numeric_id),
-                        ('login', '=', user_id_value)
+                        ('email', '=', user_id_value)
                     ], limit=1)
                     
-                    if not user:
-                        log_message(f"User not found for ID/login: {user_id_value}")
+                    if not customer:
+                        log_message(f"Customer not found for ID/email: {user_id_value}")
                         return False
                     
                     # Don't delete admin users
-                    if user.id <= 2:  # Also protect admin (2)
-                        log_message(f"Cannot delete system user with ID: {user.id}")
+                    if customer.id <= 2:  # Also protect admin (2)
+                        log_message(f"Cannot delete system user with ID: {customer.id}")
                         return False
                     
-                    # Store user info before deletion
-                    user_name = user.name
-                    user_id = user.id
-                    user_login = user.login
+                    # Store customer info before deletion
+                    customer_name = customer.name
+                    customer_id = customer.id
+                    customer_email = customer.email
                     
-                    # Log the user deletion
-                    log_message(f"Deleting user: {user_name} (ID: {user_id}, Login: {user_login})")
+                    # Log the customer deletion
+                    log_message(f"Deleting customer: {customer_name} (ID: {customer_id}, Email: {customer_email})")
                     
                     try:
-                        # First archive the user
-                        user.write({'active': False})
-                        log_message(f"User {user_name} archived successfully")
+                        # First archive the customer
+                        customer.write({'active': False})
+                        log_message(f"Customer {customer_name} archived successfully")
                         
                         # Then try to delete
-                        user.unlink()
-                        log_message(f"User with ID {user_id} deleted successfully")
+                        customer.unlink()
+                        log_message(f"Customer with ID {customer_id} deleted successfully")
                         
                         new_cr.commit()
                         log_message("Database transaction committed")
                         return True
                     except Exception as delete_error:
-                        log_message(f"Error during user deletion: {str(delete_error)}")
+                        log_message(f"Error during customer deletion: {str(delete_error)}")
                         log_message(traceback.format_exc())
                         new_cr.rollback()
                         log_message("Rolling back transaction")
@@ -312,7 +312,7 @@ class UserDeleteThread(threading.Thread):
                         
                 except Exception as e:
                     new_cr.rollback()
-                    log_message(f"Error processing user deletion: {str(e)}")
+                    log_message(f"Error processing customer deletion: {str(e)}")
                     log_message(traceback.format_exc())
                     return False
         except Exception as e:

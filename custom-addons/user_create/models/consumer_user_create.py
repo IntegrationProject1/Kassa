@@ -26,10 +26,10 @@ SERVICE_QUEUES = [
 
 # Add this to make logs more visible
 def log_message(message):
-    print(f"[USER_CREATE_MODULE] {message}")
+    print(f"[CUSTOMER_CREATE_MODULE] {message}")
     _logger.info(message)
 
-# XSD Schema as a constant
+# XSD Schema as a constant - keeping this the same as requested
 XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
     <xs:element name="UserMessage">
@@ -59,8 +59,8 @@ XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
     </xs:element>
 </xs:schema>'''
 
-class UserCreateThread(threading.Thread):
-    """Thread that listens for user create messages on RabbitMQ"""
+class CustomerCreateThread(threading.Thread):
+    """Thread that listens for customer create messages on RabbitMQ"""
     
     def __init__(self, env):
         super().__init__()
@@ -72,7 +72,7 @@ class UserCreateThread(threading.Thread):
     
     def run(self):
         """Listens to messages from the specified service queues"""
-        log_message(f"Starting UserCreateThread connecting to {RABBITMQ_HOST}:{RABBITMQ_PORT}")
+        log_message(f"Starting CustomerCreateThread connecting to {RABBITMQ_HOST}:{RABBITMQ_PORT}")
         log_message(f"Will consume from {len(SERVICE_QUEUES)} queues: {', '.join(SERVICE_QUEUES)}")
         
         while self.running:
@@ -171,10 +171,10 @@ class UserCreateThread(threading.Thread):
                     except:
                         pass
         
-        log_message("UserCreateThread stopped")
+        log_message("CustomerCreateThread stopped")
     
     def _process_message(self, body, queue_name=None):
-        """Processes an XML message to update or create a user"""
+        """Processes an XML message to update or create a customer"""
         try:
             # Log where the message came from
             source_info = f" from queue {queue_name}" if queue_name else ""
@@ -215,27 +215,27 @@ class UserCreateThread(threading.Thread):
                 env = api.Environment(new_cr, self.env.uid, self.env.context)
                 
                 try:
-                    # Parse the user data from the XML
-                    user_data = self._parse_user_data(xml_doc)
-                    if not user_data:
-                        log_message("Failed to parse user data from XML")
+                    # Parse the customer data from the XML
+                    customer_data = self._parse_customer_data(xml_doc)
+                    if not customer_data:
+                        log_message("Failed to parse customer data from XML")
                         return False
                     
-                    # Process the user data (create/update/delete)
-                    success = self._process_user_data(user_data, env)
+                    # Process the customer data (create/update/delete)
+                    success = self._process_customer_data(customer_data, env)
                     
                     if success:
                         new_cr.commit()
-                        log_message("User update successfully committed")
+                        log_message("Customer update successfully committed")
                         return True
                     else:
                         new_cr.rollback()
-                        log_message("User update failed, rolling back")
+                        log_message("Customer update failed, rolling back")
                         return False
                         
                 except Exception as e:
                     new_cr.rollback()
-                    log_message(f"Error processing user data: {str(e)}")
+                    log_message(f"Error processing customer data: {str(e)}")
                     log_message(traceback.format_exc())
                     return False
                 
@@ -244,33 +244,27 @@ class UserCreateThread(threading.Thread):
             log_message(traceback.format_exc())
             return False
     
-    def _parse_user_data(self, xml_doc):
-        """Parse the XML and extract user data"""
+    def _parse_customer_data(self, xml_doc):
+        """Parse the XML and extract customer data"""
         try:
-            user_data = {}
+            customer_data = {}
             
-            # Extract basic user information
+            # Extract basic customer information (using same element names from XSD)
             action_type_elem = xml_doc.find('.//ActionType')
-            user_id_elem = xml_doc.find('.//UserID')
+            user_id_elem = xml_doc.find('.//UserID')  # Keep UserID as in XSD
             time_of_action_elem = xml_doc.find('.//TimeOfAction')
             
             if action_type_elem is None or user_id_elem is None or time_of_action_elem is None:
                 log_message("Required elements missing from XML")
                 return None
                 
-            user_data['action_type'] = action_type_elem.text
-            user_data['user_id'] = user_id_elem.text
-            user_data['time_of_action'] = time_of_action_elem.text
+            customer_data['action_type'] = action_type_elem.text
+            customer_data['customer_id'] = user_id_elem.text  # Store as customer_id
+            customer_data['time_of_action'] = time_of_action_elem.text
             
-            log_message(f"Basic user data: ActionType={user_data['action_type']}, UserID={user_data['user_id']}")
+            log_message(f"Basic customer data: ActionType={customer_data['action_type']}, CustomerID={customer_data['customer_id']}")
             
-            # Optional password field
-            password_elem = xml_doc.find('.//Password')
-            if password_elem is not None and password_elem.text:
-                user_data['password'] = password_elem.text
-                log_message("Found Password field")
-            else:
-                user_data['password'] = ""  # Set password to empty string if not provided
+            # Skip password field for customers
             
             # Extract optional personal information
             optional_fields = ['FirstName', 'LastName', 'PhoneNumber', 'EmailAddress']
@@ -279,7 +273,7 @@ class UserCreateThread(threading.Thread):
                 if element is not None and element.text:
                     # Convert XML field name to Odoo field name (camelCase to snake_case)
                     odoo_field = ''.join(['_' + c.lower() if c.isupper() else c for c in field]).lstrip('_')
-                    user_data[odoo_field] = element.text
+                    customer_data[odoo_field] = element.text
                     log_message(f"Found {field}: {element.text}")
             
             # Extract business information if present
@@ -299,130 +293,179 @@ class UserCreateThread(threading.Thread):
                         log_message(f"Found Business.{field}: {element.text}")
                 
                 if business_data:
-                    user_data['business'] = business_data
+                    customer_data['business'] = business_data
             
-            return user_data
+            return customer_data
             
         except Exception as e:
-            log_message(f"Error parsing user data: {str(e)}")
+            log_message(f"Error parsing customer data: {str(e)}")
             log_message(traceback.format_exc())
             return None
     
-    def _process_user_data(self, user_data, env):
-        """Process the user data and update/create the user in Odoo"""
+    def _process_customer_data(self, customer_data, env):
+        """Process the customer data and update/create the customer in Odoo"""
         try:
-            user_model = env['res.users'].sudo()
             partner_model = env['res.partner'].sudo()
-
-            user_id = user_data.get('user_id')
-            log_message(f"Looking for user with ID/login: {user_id}")
-
-            if user_data.get('action_type') == 'CREATE':
-                log_message(f"Creating new user with ID/login: {user_id}")
-
-                # Prepare values for creating a new user
+            
+            customer_id = customer_data.get('customer_id')
+            log_message(f"Looking for customer with ID/email: {customer_id}")
+            
+            if customer_data.get('action_type') == 'CREATE':
+                log_message(f"Creating new customer with ID: {customer_id}")
+                
+                # Prepare values for creating a new customer (partner)
                 create_vals = {
-                    'login': user_data.get('email_address'),
-                    'name': f"{user_data.get('first_name', '')} {user_data.get('last_name', '')}",
-                    'email': user_data.get('email_address'),
-                    'password': user_data.get('password'),
+                    'name': f"{customer_data.get('first_name', '')} {customer_data.get('last_name', '')}",
+                    'email': customer_data.get('email_address'),
+                    'phone': customer_data.get('phone_number'),
+                    'customer_rank': 1,  # Set as customer
                 }
-
-                # Create the new user
+                
+                # Add company details if available
+                if 'business' in customer_data:
+                    business = customer_data.get('business')
+                    if 'business_name' in business:
+                        create_vals['company_name'] = business['business_name']
+                        create_vals['is_company'] = True
+                    if 'business_email' in business:
+                        create_vals['email'] = business['business_email']  # Override with business email if provided
+                    if 'real_address' in business:
+                        create_vals['street'] = business['real_address']
+                    if 'btw_number' in business:
+                        create_vals['vat'] = business['btw_number']
+                    if 'facturation_address' in business:
+                        create_vals['street2'] = business['facturation_address']
+                
                 try:
-                    new_user = user_model.create(create_vals)
-                    log_message(f"Created new user: {new_user.id}, Login: {new_user.login}")
-
-                    # Create the partner record
-                    partner_vals = {
-                        'name': f"{user_data.get('first_name', '')} {user_data.get('last_name', '')}",
-                        'email': user_data.get('email_address'),
-                        'phone': user_data.get('phone_number'),
-                    }
-
-                    # Create the partner (individual or company based on the business data)
-                    if 'business' in user_data:
-                        business = user_data.get('business')
-                        if 'business_name' in business:
-                            partner_vals['company_name'] = business['business_name']
-                        if 'real_address' in business:
-                            partner_vals['street'] = business['real_address']
-                        if 'btw_number' in business:
-                            partner_vals['vat'] = business['btw_number']
-                        if 'facturation_address' in business:
-                            partner_vals['street2'] = business['facturation_address']
-
-                    new_partner = partner_model.create(partner_vals)
-                    log_message(f"Created new partner: {new_partner.id}, Name: {new_partner.name}")
-
-                    # Link user to partner
-                    new_user.partner_id = new_partner.id
-                    log_message(f"Linked new user {new_user.id} to partner {new_partner.id}")
-
-                    # Commit changes
-                    new_user.env.cr.commit()
-
-                    return True  # Success in creating user
-
-                except Exception as e:
-                    log_message(f"Error creating user or partner: {str(e)}")
+                    # Add special context flag to prevent publishing
+                    new_customer = partner_model.with_context(skip_rabbitmq_publish=True).create(create_vals)
+                    log_message(f"Created new customer: {new_customer.id}, Name: {new_customer.name}")
+                    return True
+                except Exception as create_error:
+                    log_message(f"Error creating customer: {str(create_error)}")
                     log_message(traceback.format_exc())
                     return False
-
-            elif user_data.get('action_type') == 'UPDATE':
-                log_message(f"UPDATE action skipped for user ID {user_id}")
-                return False  # Skip update action
-
-            elif user_data.get('action_type') == 'DELETE':
-                # Handle deletion or archiving of user (as per existing logic)
-                return False
-
+                    
+            elif customer_data.get('action_type') == 'UPDATE':
+                log_message(f"UPDATE action for customer ID {customer_id}")
+                
+                # Try to find the customer by ID (numeric) or email
+                try:
+                    numeric_id = int(customer_id)
+                    log_message(f"Looking for customer with numeric ID: {numeric_id}")
+                except (ValueError, TypeError):
+                    numeric_id = -1
+                    log_message(f"Customer ID is not numeric, using email lookup")
+                
+                # Find customer by ID or email
+                customer = partner_model.search([
+                    '|',
+                    ('id', '=', numeric_id),
+                    ('email', '=', customer_id)
+                ], limit=1)
+                
+                if not customer:
+                    log_message(f"Customer not found with ID/email: {customer_id}")
+                    return False
+                    
+                log_message(f"Found customer: {customer.name} (ID: {customer.id})")
+                
+                # Prepare update values
+                update_vals = {}
+                if 'first_name' in customer_data or 'last_name' in customer_data:
+                    first = customer_data.get('first_name', '')
+                    last = customer_data.get('last_name', '')
+                    if first or last:
+                        update_vals['name'] = f"{first} {last}".strip()
+                
+                if 'email_address' in customer_data:
+                    update_vals['email'] = customer_data['email_address']
+                    
+                if 'phone_number' in customer_data:
+                    update_vals['phone'] = customer_data['phone_number']
+                    
+                # Update business details if provided
+                if 'business' in customer_data:
+                    business = customer_data.get('business')
+                    if 'business_name' in business:
+                        update_vals['company_name'] = business['business_name']
+                        update_vals['is_company'] = True
+                    if 'business_email' in business:
+                        update_vals['email'] = business['business_email']
+                    if 'real_address' in business:
+                        update_vals['street'] = business['real_address']
+                    if 'btw_number' in business:
+                        update_vals['vat'] = business['btw_number']
+                    if 'facturation_address' in business:
+                        update_vals['street2'] = business['facturation_address']
+                
+                if update_vals:
+                    try:
+                        customer.write(update_vals)
+                        log_message(f"Updated customer {customer.id} with new values")
+                        return True
+                    except Exception as update_error:
+                        log_message(f"Error updating customer: {str(update_error)}")
+                        return False
+                else:
+                    log_message("No values to update for customer")
+                    return True
+                    
+            elif customer_data.get('action_type') == 'DELETE':
+                log_message(f"DELETE action for customer ID {customer_id} - handling through separate module")
+                return True  # Accept DELETE messages but handle them in user_delete module
+                
             else:
-                log_message(f"Unknown action type: {user_data.get('action_type')}")
+                log_message(f"Unknown action type: {customer_data.get('action_type')}")
                 return False
-
+                
         except Exception as e:
-            log_message(f"Unexpected error processing user data: {str(e)}")
+            log_message(f"Unexpected error processing customer data: {str(e)}")
             log_message(traceback.format_exc())
             return False
+    
+    def stop(self):
+        """Stop the thread cleanly"""
+        self.running = False
+        log_message("Stopping CustomerCreateThread...")
 
 
 # Global thread instance
-user_create_thread = None
+customer_create_thread = None
 
-class RabbitMQUserCreate(models.AbstractModel):
-    _name = 'rabbitmq.user.create'
-    _description = 'RabbitMQ User create Service'
+class RabbitMQCustomerCreate(models.AbstractModel):
+    _name = 'rabbitmq.customer.create'
+    _description = 'RabbitMQ Customer Create Service'
     
     @api.model
     def start_service(self):
-        """Start the user create service if it's not already running"""
-        global user_create_thread
-        if not user_create_thread or not user_create_thread.is_alive():
-            print("Starting RabbitMQ User create Service...")
-            user_create_thread = UserCreateThread(self.env)
-            user_create_thread.start()
+        """Start the customer create service if it's not already running"""
+        global customer_create_thread
+        if not customer_create_thread or not customer_create_thread.is_alive():
+            print("Starting RabbitMQ Customer Create Service...")
+            customer_create_thread = CustomerCreateThread(self.env)
+            customer_create_thread.start()
             return True
-        print("RabbitMQ User create Service already running.")
+        print("RabbitMQ Customer Create Service already running.")
         return False
     
     @api.model
     def stop_service(self):
-        """Stop the user create service"""
-        global user_create_thread
-        if user_create_thread and user_create_thread.is_alive():
-            user_create_thread.stop()
+        """Stop the customer create service"""
+        global customer_create_thread
+        if customer_create_thread and customer_create_thread.is_alive():
+            customer_create_thread.stop()
             return True
         return False
 
-class RabbitMQUserCreateStartup(models.AbstractModel):
-    _name = "rabbitmq.user.create.startup"
-    _description = "Start RabbitMQ User create on Odoo startup"
+class RabbitMQCustomerCreateStartup(models.AbstractModel):
+    _name = "rabbitmq.customer.create.startup"
+    _description = "Start RabbitMQ Customer Create on Odoo startup"
     
     @api.model
     def _register_hook(self):
         """Start the service on Odoo startup"""
-        self.env['rabbitmq.user.create'].start_service()
+        self.env['rabbitmq.customer.create'].start_service()
         
         
 """om te testen of het werkt kan je dit in rabbitmq zetten (gegevens wel aanpassen): 
