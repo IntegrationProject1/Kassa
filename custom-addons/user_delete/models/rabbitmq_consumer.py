@@ -35,7 +35,7 @@ XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
         <xs:complexType>
             <xs:sequence>
                 <xs:element name="ActionType" type="xs:string"/>
-                <xs:element name="UserID" type="xs:string"/>
+                <xs:element name="UUID" type="xs:int"/>
                 <xs:element name="TimeOfAction" type="xs:dateTime"/>
             </xs:sequence>
         </xs:complexType>
@@ -212,7 +212,7 @@ class UserDeleteThread(threading.Thread):
                     
                     # Check message format
                     action_type = root.find('ActionType')
-                    user_id = root.find('UserID')
+                    uuid_elem = root.find('UUID')  # Changed from UserID to UUID
                     time_of_action = root.find('TimeOfAction')
                     
                     # Debug logging with element existence check
@@ -222,10 +222,10 @@ class UserDeleteThread(threading.Thread):
                         log_message("ActionType element not found")
                         return False
                         
-                    if user_id is not None:
-                        log_message(f"Found UserID: '{user_id.text}'")
+                    if uuid_elem is not None:
+                        log_message(f"Found UUID: '{uuid_elem.text}'")
                     else:
-                        log_message("UserID element not found")
+                        log_message("UUID element not found")
                         return False
                     
                     if time_of_action is not None:
@@ -238,8 +238,8 @@ class UserDeleteThread(threading.Thread):
                     if not action_type.text or action_type.text.strip() == '':
                         log_message("ActionType element has no text")
                         return False
-                    if not user_id.text or user_id.text.strip() == '':
-                        log_message("UserID element has no text")
+                    if not uuid_elem.text or uuid_elem.text.strip() == '':
+                        log_message("UUID element has no text")
                         return False
                     if not time_of_action.text or time_of_action.text.strip() == '':
                         log_message("TimeOfAction element has no text")
@@ -250,33 +250,23 @@ class UserDeleteThread(threading.Thread):
                         log_message(f"Not a DELETE action: '{action_type.text}'")
                         return False
                     
-                    user_id_value = user_id.text.strip()
-                    log_message(f"Processing delete request for user ID: {user_id_value}")
-                    
-                    # Find the customer - search for numeric ID, email, or external_id
-                    # Convert to integer if it's a number
+                    # Ensure UUID is an integer
                     try:
-                        numeric_id = int(user_id_value)
-                        log_message(f"Converted customer ID to numeric: {numeric_id}")
+                        uuid_value = int(uuid_elem.text.strip())
+                        log_message(f"Processing delete request for UUID: {uuid_value}")
                     except (ValueError, TypeError):
-                        numeric_id = -1
-                        log_message(f"Customer ID is not numeric, using -1 for numeric search")
-                        
-                    log_message(f"Searching for customer with ID {numeric_id} or email {user_id_value} or external_id {user_id_value}")
+                        log_message(f"Error: UUID must be an integer, received: {uuid_elem.text}")
+                        return False
                     
-                    # Diagnostic - verify customers exist in database
-                    all_customers = env['res.partner'].sudo().search_read([('customer_rank', '>', 0)], ['id', 'name', 'email', 'external_id'])
-                    log_message(f"Found {len(all_customers)} customers in database. First few: {all_customers[:5]}")
-                    
+                    # Search by external_id (highest priority)
                     customer = env['res.partner'].sudo().search([
-                        '|', '|', 
-                        ('id', '=', numeric_id),
-                        ('email', '=', user_id_value),
-                        ('external_id', '=', user_id_value)
+                        ('external_id', '=', str(uuid_value))
                     ], limit=1)
                     
-                    if not customer:
-                        log_message(f"Customer not found for ID/email/external_id: {user_id_value}")
+                    if customer:
+                        log_message(f"Found customer by external_id={uuid_value}: ID={customer.id}, Name={customer.name}")
+                    else:
+                        log_message(f"No customer found with external_id or database ID={uuid_value}")
                         return False
                     
                     # Don't delete admin users

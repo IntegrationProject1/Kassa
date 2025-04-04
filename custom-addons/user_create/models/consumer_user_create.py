@@ -36,7 +36,7 @@ XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
         <xs:complexType>
             <xs:sequence>
                 <xs:element name="ActionType" type="xs:string"/>
-                <xs:element name="UserID" type="xs:string"/>
+                <xs:element name="UUID" type="xs:int"/>
                 <xs:element name="TimeOfAction" type="xs:dateTime"/>
                 <xs:element name="Password" type="xs:string" minOccurs="0"/>
                 <xs:element name="FirstName" type="xs:string" minOccurs="0"/>
@@ -251,7 +251,7 @@ class CustomerCreateThread(threading.Thread):
             
             # Extract basic customer information (using same element names from XSD)
             action_type_elem = xml_doc.find('.//ActionType')
-            user_id_elem = xml_doc.find('.//UserID')  # Keep UserID as in XSD
+            user_id_elem = xml_doc.find('.//UUID')  # Changed from UserID to UUID
             time_of_action_elem = xml_doc.find('.//TimeOfAction')
             
             if action_type_elem is None or user_id_elem is None or time_of_action_elem is None:
@@ -259,12 +259,16 @@ class CustomerCreateThread(threading.Thread):
                 return None
                 
             customer_data['action_type'] = action_type_elem.text
-            customer_data['customer_id'] = user_id_elem.text  # Store as customer_id
+            # Convert UUID to integer and then back to string for consistency with existing code
+            try:
+                customer_data['customer_id'] = str(int(user_id_elem.text))
+            except (ValueError, TypeError):
+                log_message(f"Error: UUID must be an integer, received: {user_id_elem.text}")
+                return None
+                
             customer_data['time_of_action'] = time_of_action_elem.text
             
-            log_message(f"Basic customer data: ActionType={customer_data['action_type']}, CustomerID={customer_data['customer_id']}")
-            
-            # Skip password field for customers
+            log_message(f"Basic customer data: ActionType={customer_data['action_type']}, UUID={customer_data['customer_id']}")
             
             # Extract optional personal information
             optional_fields = ['FirstName', 'LastName', 'PhoneNumber', 'EmailAddress']
@@ -483,7 +487,7 @@ class ResPartner(models.Model):
 """om te testen of het werkt kan je dit in rabbitmq zetten (gegevens wel aanpassen): 
 <UserMessage>
     <ActionType>CREATE</ActionType>
-    <UserID>54321</UserID>
+    <UUID>54321</UUID>
     <TimeOfAction>2025-03-30T12:34:56Z</TimeOfAction>
     <FirstName>John</FirstName>
     <LastName>Pork</LastName>

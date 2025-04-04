@@ -20,7 +20,7 @@ USER_MESSAGE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
         <xs:complexType>
             <xs:sequence>
                 <xs:element name="ActionType" type="xs:string"/>
-                <xs:element name="UserID" type="xs:string"/>
+                <xs:element name="UUID" type="xs:int"/>
                 <xs:element name="TimeOfAction" type="xs:dateTime"/>
             </xs:sequence>
         </xs:complexType>
@@ -71,9 +71,18 @@ class RabbitMQPublisher(models.AbstractModel):
         action_type = ET.SubElement(root, "ActionType")
         action_type.text = "DELETE"
         
-        user_id_elem = ET.SubElement(root, "UserID")
-        # Use external_id if available, otherwise use customer_id
-        user_id_elem.text = str(external_id) if external_id else str(customer_id)
+        # Convert the ID to an integer first
+        try:
+            if external_id:
+                uuid_value = int(external_id)
+            else:
+                uuid_value = int(customer_id)
+        except (ValueError, TypeError):
+            uuid_value = int(customer_id)  # Fall back to numeric ID
+            log_message(f"Warning: Could not convert external_id '{external_id}' to int, using ID: {customer_id}")
+        
+        uuid_elem = ET.SubElement(root, "UUID")
+        uuid_elem.text = str(uuid_value)
         
         time_of_action = ET.SubElement(root, "TimeOfAction")
         time_of_action.text = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -91,8 +100,20 @@ class RabbitMQPublisher(models.AbstractModel):
     def publish_customer_delete(self, customer_id, external_id=None):
         """Publish customer deletion message to all other service queues"""
         try:
-            identifier = external_id if external_id else customer_id
-            log_message(f"Publishing customer deletion message for customer identifier: {identifier}")
+            # Try to convert external_id to integer for UUID field
+            try:
+                if external_id:
+                    uuid_value = int(external_id)
+                    identifier = external_id
+                else:
+                    uuid_value = int(customer_id)
+                    identifier = customer_id
+            except (ValueError, TypeError):
+                uuid_value = int(customer_id)
+                identifier = customer_id
+                log_message(f"Warning: Could not convert external_id '{external_id}' to int, using ID: {customer_id}")
+            
+            log_message(f"Publishing customer deletion message for UUID: {uuid_value} (identifier: {identifier})")
             
             # Update target queues to be customer-focused
             target_queues = [

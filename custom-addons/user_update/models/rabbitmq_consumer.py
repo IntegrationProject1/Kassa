@@ -39,7 +39,7 @@ XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
         <xs:complexType>
             <xs:sequence>
                 <xs:element name="ActionType" type="xs:string"/>
-                <xs:element name="UserID" type="xs:string"/>
+                <xs:element name="UUID" type="xs:int"/>
                 <xs:element name="TimeOfAction" type="xs:dateTime"/>
                 <xs:element name="Password" type="xs:string" minOccurs="0"/>
                 <xs:element name="FirstName" type="xs:string" minOccurs="0"/>
@@ -253,20 +253,27 @@ class CustomerUpdateThread(threading.Thread):
             
             # Extract basic customer information (using same element names from XSD)
             action_type_elem = xml_doc.find('.//ActionType')
-            user_id_elem = xml_doc.find('.//UserID')  # Still using UserID from XSD
+            uuid_elem = xml_doc.find('.//UUID')  # Changed from UserID to UUID
             time_of_action_elem = xml_doc.find('.//TimeOfAction')
             
-            if action_type_elem is None or user_id_elem is None or time_of_action_elem is None:
+            if action_type_elem is None or uuid_elem is None or time_of_action_elem is None:
                 log_message("Required elements missing from XML")
                 return None
                 
             customer_data['action_type'] = action_type_elem.text
-            customer_data['customer_id'] = user_id_elem.text  # Store as customer_id
+            
+            # Store UUID as customer_id (ensure it's an integer)
+            try:
+                uuid_value = int(uuid_elem.text)
+                customer_data['customer_id'] = str(uuid_value)  # Convert to string for consistency
+                log_message(f"Parsed UUID: {uuid_value} (stored as: {customer_data['customer_id']})")
+            except (ValueError, TypeError):
+                log_message(f"Error: UUID must be an integer, received: {uuid_elem.text}")
+                return None
+            
             customer_data['time_of_action'] = time_of_action_elem.text
             
-            log_message(f"Basic customer data: ActionType={customer_data['action_type']}, CustomerID={customer_data['customer_id']}")
-            
-            # No password needed for customers
+            log_message(f"Basic customer data: ActionType={customer_data['action_type']}, UUID={customer_data['customer_id']}")
             
             # Extract optional personal information
             optional_fields = ['FirstName', 'LastName', 'PhoneNumber', 'EmailAddress']
@@ -317,14 +324,13 @@ class CustomerUpdateThread(threading.Thread):
             
             # Try to find the customer by ID or email
             customer_id = customer_data.get('customer_id')
-            log_message(f"Looking for customer with ID/email/external_id: {customer_id}")
+            log_message(f"Looking for customer with UUID (external_id): {customer_id}")
             
             # First, try to find by external_id (highest priority)
-            customer_by_external_id = partner_model.search([
+            customer = partner_model.search([
                 ('external_id', '=', customer_id)
             ], limit=1)
             
-            customer = partner_model.search([('external_id', '=', customer_id)], limit=1)
             if customer:
                 log_message(f"Found customer by external_id={customer_id}: ID={customer.id}, Name={customer.name}")
             else:
@@ -332,14 +338,14 @@ class CustomerUpdateThread(threading.Thread):
             
             if customer_data.get('action_type') == 'UPDATE':
                 if not customer:
-                    log_message(f"Customer with ID {customer_id} not found for update")
+                    log_message(f"Customer with UUID {customer_id} not found for update")
                     return False
                     
-                log_message(f"Updating customer with ID {customer_id}, database ID: {customer.id}, external_id: {customer.external_id}")
+                log_message(f"Updating customer with UUID {customer_id}, database ID: {customer.id}, external_id: {customer.external_id}")
                 
                 # Always ensure external_id is set when updating by it
                 update_vals = {}
-                if customer_by_external_id and not customer.external_id:
+                if not customer.external_id:
                     update_vals['external_id'] = customer_id
                     log_message(f"Setting missing external_id to {customer_id}")
                     

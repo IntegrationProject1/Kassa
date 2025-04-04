@@ -29,7 +29,7 @@ USER_CREATE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
         <xs:complexType>
             <xs:sequence>
                 <xs:element name="ActionType" type="xs:string"/>
-                <xs:element name="UserID" type="xs:string"/>
+                <xs:element name="UUID" type="xs:int"/>
                 <xs:element name="TimeOfAction" type="xs:dateTime"/>
                 <xs:element name="FirstName" type="xs:string" minOccurs="0"/>
                 <xs:element name="LastName" type="xs:string" minOccurs="0"/>
@@ -136,7 +136,7 @@ class ResPartner(models.Model):
     def publish_customer_create(self, partner_data):
         """Publish customer create message to other service queues"""
         try:
-            customer_id = partner_data.get('UserID')
+            customer_id = partner_data.get('UUID')  # Changed from UserID to UUID
             log_message(f"Publishing customer create message for customer_id: {customer_id}")
             
             # Create the message
@@ -247,7 +247,7 @@ class ResPartner(models.Model):
             # Prepare customer data
             partner_data = {
                 'ActionType': 'CREATE',
-                'UserID': partner.external_id or str(partner.id),  # Use external_id if available, otherwise fall back to internal ID
+                'UUID': int(partner.external_id or partner.id),  # Changed UserID to UUID, ensure it's an integer
                 'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
                 'FirstName': partner.name.split(' ')[0] if partner.name else '',
                 'LastName': ' '.join(partner.name.split(' ')[1:]) if partner.name and ' ' in partner.name else '',
