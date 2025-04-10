@@ -6,7 +6,7 @@ on:
 
 jobs:
   build:
-    name: Build Odoo
+    name: Build and Test Odoo
     runs-on: self-hosted 
     defaults:
       run:
@@ -22,10 +22,37 @@ jobs:
       - name: Build Docker Image
         run: docker compose --env-file /home/ehbstudent/.env build
 
-      - name: Test Docker Compose
+      - name: Run Tests
         run: |
+          # Start containers in detached mode
           docker compose --env-file /home/ehbstudent/.env up -d
-          sleep 10
-          docker ps
-          docker inspect --format='{{json .State.Health}}' $(docker ps -q) | jq
+          
+          # Wait for Odoo to be ready
+          sleep 15
+          
+          # Get the Odoo container ID
+          ODOO_CONTAINER=$(docker compose ps -q odoo)
+          
+          # Create a test database and run the tests
+          docker exec $ODOO_CONTAINER python3 /usr/bin/odoo \
+            --db_host=$DB_HOST \
+            --db_user=$DB_USER \
+            --db_password=$DB_PASSWORD \
+            -d test_db_$GITHUB_RUN_ID \
+            --stop-after-init \
+            --test-enable \
+            --log-level=test \
+            --init=pos_kassa \
+            --addons-path=/mnt/extra-addons
+          
+          # Store test exit code
+          TEST_EXIT_CODE=$?
+          
+          # Show container logs for debugging
+          docker compose logs odoo
+          
+          # Cleanup 
           docker compose down
+          
+          # Exit with the test exit code
+          exit $TEST_EXIT_CODE
