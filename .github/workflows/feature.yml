@@ -35,7 +35,7 @@ jobs:
           
           # Create a test database and run the tests
           docker exec $ODOO_CONTAINER python3 /usr/bin/odoo \
-            --db_host=$DB_HOST \
+            --db_host=db \
             --db_user=$DB_USER \
             --db_password=$DB_PASSWORD \
             -d test_db_$GITHUB_RUN_ID \
