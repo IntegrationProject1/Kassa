@@ -24,11 +24,26 @@ jobs:
 
       - name: Run Tests
         run: |
-          # Start containers in detached mode
-          docker compose --env-file /home/ehbstudent/.env up -d
+          # Start the database container first
+          docker compose --env-file /home/ehbstudent/.env up -d db
+          
+          # Wait for PostgreSQL to be ready
+          echo "Waiting for PostgreSQL to be ready..."
+          for i in {1..30}; do
+            if docker exec $(docker compose ps -q db) pg_isready -h localhost -U "$POSTGRES_USER" -d "$POSTGRES_DB"; then
+              echo "PostgreSQL is ready!"
+              break
+            fi
+            echo "Waiting for PostgreSQL to start... ($i/30)"
+            sleep 3
+          done
+          
+          # Start Odoo container
+          docker compose --env-file /home/ehbstudent/.env up -d odoo
           
           # Wait for Odoo to be ready
-          sleep 15
+          echo "Waiting for Odoo to be ready..."
+          sleep 20
           
           # Get the Odoo container ID
           ODOO_CONTAINER=$(docker compose ps -q odoo)
@@ -36,6 +51,7 @@ jobs:
           # Source the .env file to get variables in the current shell
           source /home/ehbstudent/.env
           
+          echo "Running Odoo tests..."
           # Create a test database and run the tests
           docker exec $ODOO_CONTAINER python3 /usr/bin/odoo \
             --db_host=db \
@@ -53,6 +69,7 @@ jobs:
           TEST_EXIT_CODE=$?
           
           # Show container logs for debugging
+          echo "Odoo container logs:"
           docker compose logs odoo
           
           # Cleanup 
