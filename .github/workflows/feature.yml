@@ -33,11 +33,14 @@ jobs:
           # Get the Odoo container ID
           ODOO_CONTAINER=$(docker compose ps -q odoo)
           
+          # Source the .env file to get variables in the current shell
+          source /home/ehbstudent/.env
+          
           # Create a test database and run the tests
           docker exec $ODOO_CONTAINER python3 /usr/bin/odoo \
             --db_host=db \
-            --db_user=$DB_USER \
-            --db_password=$DB_PASSWORD \
+            --db_user="$POSTGRES_USER" \
+            --db_password="$POSTGRES_PASSWORD" \
             -d test_db_$GITHUB_RUN_ID \
             --stop-after-init \
             --test-enable \
