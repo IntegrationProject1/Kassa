@@ -352,72 +352,8 @@ class CustomerCreateThread(threading.Thread):
                     return False
                     
             elif customer_data.get('action_type') == 'UPDATE':
-                log_message(f"UPDATE action for customer ID {customer_id}")
-                
-                # Try to find the customer by ID (numeric) or email
-                try:
-                    numeric_id = int(customer_id)
-                    log_message(f"Looking for customer with numeric ID: {numeric_id}")
-                except (ValueError, TypeError):
-                    numeric_id = -1
-                    log_message(f"Customer ID is not numeric, using email lookup")
-                
-                # Find customer by ID or email or external_id
-                customer = partner_model.search([
-                    '|', '|',
-                    ('id', '=', numeric_id),
-                    ('email', '=', customer_id),
-                    ('external_id', '=', customer_id)
-                ], limit=1)
-                
-                if not customer:
-                    log_message(f"Customer not found with ID/email/external_id: {customer_id}")
-                    return False
-                    
-                log_message(f"Found customer: {customer.name} (ID: {customer.id})")
-                
-                # Prepare update values
-                update_vals = {
-                    'external_id': customer_id,  # Always update external_id to ensure it's set
-                }
-                if 'first_name' in customer_data or 'last_name' in customer_data:
-                    first = customer_data.get('first_name', '')
-                    last = customer_data.get('last_name', '')
-                    if first or last:
-                        update_vals['name'] = f"{first} {last}".strip()
-                
-                if 'email_address' in customer_data:
-                    update_vals['email'] = customer_data['email_address']
-                    
-                if 'phone_number' in customer_data:
-                    update_vals['phone'] = customer_data['phone_number']
-                    
-                # Update business details if provided
-                if 'business' in customer_data:
-                    business = customer_data.get('business')
-                    if 'business_name' in business:
-                        update_vals['company_name'] = business['business_name']
-                        update_vals['is_company'] = True
-                    if 'business_email' in business:
-                        update_vals['email'] = business['business_email']
-                    if 'real_address' in business:
-                        update_vals['street'] = business['real_address']
-                    if 'btw_number' in business:
-                        update_vals['vat'] = business['btw_number']
-                    if 'facturation_address' in business:
-                        update_vals['street2'] = business['facturation_address']
-                
-                if update_vals:
-                    try:
-                        customer.write(update_vals)
-                        log_message(f"Updated customer {customer.id} with new values")
-                        return True
-                    except Exception as update_error:
-                        log_message(f"Error updating customer: {str(update_error)}")
-                        return False
-                else:
-                    log_message("No values to update for customer")
-                    return True
+                log_message(f"UPDATE action for customer ID {customer_id} - handling through separate module")
+                return True  # Accept UPDATE messages but handle them in another module
                     
             elif customer_data.get('action_type') == 'DELETE':
                 log_message(f"DELETE action for customer ID {customer_id} - handling through separate module")
@@ -483,15 +419,3 @@ class ResPartner(models.Model):
                              help="External identifier for integration with other systems",
                              index=True)
         
-        
-"""om te testen of het werkt kan je dit in rabbitmq zetten (gegevens wel aanpassen): 
-<UserMessage>
-    <ActionType>CREATE</ActionType>
-    <UUID>54321</UUID>
-    <TimeOfAction>2025-03-30T12:34:56Z</TimeOfAction>
-    <FirstName>John</FirstName>
-    <LastName>Pork</LastName>
-    <PhoneNumber>+1234563890</PhoneNumber>
-    <EmailAddress>john.pork@example.com</EmailAddress>
-</UserMessage>
-"""
