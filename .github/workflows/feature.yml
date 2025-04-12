@@ -46,7 +46,8 @@ jobs:
             --test-enable \
             --log-level=test \
             --init=pos_kassa \
-            --addons-path=/mnt/extra-addons
+            --addons-path=/mnt/extra-addons \
+            --http-port=8070
           
           # Store test exit code
           TEST_EXIT_CODE=$?
