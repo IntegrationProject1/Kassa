@@ -18,17 +18,18 @@ class TestUserCreateConsumer(TransactionCase):
         self.test_partner = self.env['res.partner'].create({
             'name': 'Existing Test Customer',
             'email': 'existing@example.com',
-            'external_id': '12345'
+            'external_id': '2023-04-23T12:34:56.789012Z'  # Updated to timestamp format
         })
 
     def test_valid_create_message(self):
         """Test processing a valid CREATE message with basic user data"""
-        # Create valid XML message
+        # Create valid XML message with timestamp UUID
         valid_xml = '''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>CREATE</ActionType>
-            <UUID>54321</UUID>
-            <TimeOfAction>2023-01-01T12:00:00</TimeOfAction>
+            <UUID>2023-04-23T10:20:30.123456Z</UUID>
+            <TimeOfAction>2023-04-23T10:20:30.123456Z</TimeOfAction>
+            <EncryptedPassword>odooadmin</EncryptedPassword>
             <FirstName>John</FirstName>
             <LastName>Doe</LastName>
             <PhoneNumber>+1234567890</PhoneNumber>
@@ -50,16 +51,17 @@ class TestUserCreateConsumer(TransactionCase):
             self.assertEqual(create_vals.get('name'), 'John Doe')
             self.assertEqual(create_vals.get('email'), 'john.doe@example.com')
             self.assertEqual(create_vals.get('phone'), '+1234567890')
-            self.assertEqual(create_vals.get('external_id'), '54321')
+            self.assertEqual(create_vals.get('external_id'), '2023-04-23T10:20:30.123456Z')
 
     def test_valid_create_message_with_business(self):
         """Test processing a valid CREATE message with business data"""
-        # Create valid XML message with business information
+        # Create valid XML message with timestamp UUID and business information
         valid_xml = '''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>CREATE</ActionType>
-            <UUID>98765</UUID>
-            <TimeOfAction>2023-01-01T12:00:00</TimeOfAction>
+            <UUID>2023-04-23T11:22:33.445566Z</UUID>
+            <TimeOfAction>2023-04-23T11:22:33.445566Z</TimeOfAction>
+            <EncryptedPassword>odooadmin</EncryptedPassword>
             <FirstName>Jane</FirstName>
             <LastName>Smith</LastName>
             <PhoneNumber>+9876543210</PhoneNumber>
@@ -98,8 +100,8 @@ class TestUserCreateConsumer(TransactionCase):
         invalid_xml = '''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>CREATE</ActionType>
-            <UUID>12345</UUID>
-            <TimeOfAction>2023-01-01T12:00:00
+            <UUID>2023-04-23T10:20:30.123456Z</UUID>
+            <TimeOfAction>2023-04-23T10:20:30
         </UserMessage>
         '''
         
@@ -111,7 +113,8 @@ class TestUserCreateConsumer(TransactionCase):
         missing_elem_xml = '''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>CREATE</ActionType>
-            <TimeOfAction>2023-01-01T12:00:00</TimeOfAction>
+            <TimeOfAction>2023-04-23T10:20:30.123456Z</TimeOfAction>
+            <EncryptedPassword>odooadmin</EncryptedPassword>
             <FirstName>John</FirstName>
             <LastName>Doe</LastName>
         </UserMessage>
@@ -120,17 +123,18 @@ class TestUserCreateConsumer(TransactionCase):
         result = self.thread._process_message(missing_elem_xml.encode('utf-8'), 'test_queue')
         self.assertFalse(result)
 
-    def test_non_integer_uuid(self):
-        """Test processing UUID that is not an integer"""
-        non_int_uuid_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+    def test_invalid_datetime_format(self):
+        """Test processing UUID that is not a valid dateTime format"""
+        invalid_datetime_xml = '''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>CREATE</ActionType>
-            <UUID>abc123</UUID>
-            <TimeOfAction>2023-01-01T12:00:00</TimeOfAction>
+            <UUID>not-a-valid-datetime</UUID>
+            <TimeOfAction>2023-04-23T10:20:30.123456Z</TimeOfAction>
+            <EncryptedPassword>odooadmin</EncryptedPassword>
             <FirstName>John</FirstName>
             <LastName>Doe</LastName>
         </UserMessage>
         '''
         
-        result = self.thread._process_message(non_int_uuid_xml.encode('utf-8'), 'test_queue')
+        result = self.thread._process_message(invalid_datetime_xml.encode('utf-8'), 'test_queue')
         self.assertFalse(result)

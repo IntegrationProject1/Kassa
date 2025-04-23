@@ -10,21 +10,23 @@ class TestUserUpdatePublisher(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        # Create a test partner
+        # Create a test partner with timestamp-based external_id
+        self.timestamp_id = '2023-04-23T10:20:30.123456Z'
         self.test_partner = self.env['res.partner'].create({
             'name': 'Test Customer',
             'email': 'test@example.com',
             'phone': '+32123456789',
             'customer_rank': 1,
-            'external_id': '98765'
+            'external_id': self.timestamp_id
         })
 
     def test_create_customer_update_message(self):
         """Test creation of XML message for customer update"""
         partner_data = {
             'ActionType': 'UPDATE',
-            'UUID': 98765,
-            'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            'UUID': self.timestamp_id,
+            'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            'EncryptedPassword': 'odooadmin',
             'FirstName': 'Test',
             'LastName': 'Customer',
             'PhoneNumber': '+32123456789',
@@ -48,9 +50,10 @@ class TestUserUpdatePublisher(TransactionCase):
         
         # Check required elements
         self.assertEqual(root.find('ActionType').text, 'UPDATE')
-        self.assertEqual(root.find('UUID').text, '98765')
+        self.assertEqual(root.find('UUID').text, self.timestamp_id)
         
         # Check regular elements
+        self.assertEqual(root.find('EncryptedPassword').text, 'odooadmin')
         self.assertEqual(root.find('FirstName').text, 'Test')
         self.assertEqual(root.find('LastName').text, 'Customer')
         self.assertEqual(root.find('PhoneNumber').text, '+32123456789')
@@ -67,12 +70,13 @@ class TestUserUpdatePublisher(TransactionCase):
 
     def test_validate_xml_against_xsd(self):
         """Test XML validation against XSD schema"""
-        # Create a valid XML message
+        # Create a valid XML message with timestamp UUID
         valid_xml = '''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>UPDATE</ActionType>
-            <UUID>98765</UUID>
-            <TimeOfAction>2023-05-15T10:30:00Z</TimeOfAction>
+            <UUID>2023-05-15T10:30:00.123456Z</UUID>
+            <TimeOfAction>2023-05-15T10:30:00.123456Z</TimeOfAction>
+            <EncryptedPassword>odooadmin</EncryptedPassword>
             <FirstName>Test</FirstName>
             <LastName>Customer</LastName>
         </UserMessage>'''
@@ -85,11 +89,25 @@ class TestUserUpdatePublisher(TransactionCase):
         invalid_xml = '''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>UPDATE</ActionType>
-            <TimeOfAction>2023-05-15T10:30:00Z</TimeOfAction>
+            <TimeOfAction>2023-05-15T10:30:00.123456Z</TimeOfAction>
+            <EncryptedPassword>odooadmin</EncryptedPassword>
         </UserMessage>'''
         
         # Test validation fails
         is_valid = self.test_partner.validate_xml_against_xsd(invalid_xml, USER_UPDATE_XSD)
+        self.assertFalse(is_valid)
+        
+        # Create an invalid XML message (invalid UUID format)
+        invalid_uuid_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+        <UserMessage>
+            <ActionType>UPDATE</ActionType>
+            <UUID>not-a-valid-datetime</UUID>
+            <TimeOfAction>2023-05-15T10:30:00.123456Z</TimeOfAction>
+            <EncryptedPassword>odooadmin</EncryptedPassword>
+        </UserMessage>'''
+        
+        # Test validation fails for invalid UUID format
+        is_valid = self.test_partner.validate_xml_against_xsd(invalid_uuid_xml, USER_UPDATE_XSD)
         self.assertFalse(is_valid)
 
     @patch('pika.BlockingConnection')
@@ -99,11 +117,12 @@ class TestUserUpdatePublisher(TransactionCase):
         mock_channel = MagicMock()
         mock_connection.return_value.channel.return_value = mock_channel
         
-        # Partner data for update
+        # Partner data for update with timestamp UUID
         partner_data = {
             'ActionType': 'UPDATE',
-            'UUID': 98765,
-            'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            'UUID': self.timestamp_id,
+            'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            'EncryptedPassword': 'odooadmin',
             'FirstName': 'Test',
             'LastName': 'Customer',
             'PhoneNumber': '+32123456789',
@@ -147,6 +166,6 @@ class TestUserUpdatePublisher(TransactionCase):
             # Check the parameters passed to publish_customer_update
             call_args = mock_publish.call_args[0][0]
             self.assertEqual(call_args['ActionType'], 'UPDATE')
-            self.assertEqual(call_args['UUID'], 98765)
+            self.assertEqual(call_args['UUID'], self.timestamp_id)
             self.assertEqual(call_args['EmailAddress'], 'updated@example.com')
             self.assertEqual(call_args['PhoneNumber'], '+32987654321')

@@ -14,23 +14,25 @@ class TestUserUpdateConsumer(TransactionCase):
         # Create a mock environment for the thread
         self.thread = CustomerUpdateThread(self.env)
         
-        # Create a test partner
+        # Create a test partner with timestamp external_id
+        self.timestamp_id = '2023-04-23T10:20:30.123456Z'
         self.test_partner = self.env['res.partner'].create({
             'name': 'Test Customer',
             'email': 'test@example.com',
             'phone': '+32123456789',
             'customer_rank': 1,
-            'external_id': '54321'
+            'external_id': self.timestamp_id
         })
 
     def test_valid_update_message(self):
         """Test processing a valid UPDATE message"""
-        # Create valid XML message
-        valid_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+        # Create valid XML message with timestamp UUID
+        valid_xml = f'''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>UPDATE</ActionType>
-            <UUID>54321</UUID>
-            <TimeOfAction>2023-01-01T12:00:00</TimeOfAction>
+            <UUID>{self.timestamp_id}</UUID>
+            <TimeOfAction>2023-04-23T11:22:33.445566Z</TimeOfAction>
+            <EncryptedPassword>odooadmin</EncryptedPassword>
             <FirstName>Updated</FirstName>
             <LastName>Customer</LastName>
             <PhoneNumber>+32987654321</PhoneNumber>
@@ -54,14 +56,12 @@ class TestUserUpdateConsumer(TransactionCase):
 
     def test_update_with_business_data(self):
         """Test updating a customer with business data"""
-        # Create XML with business information
-        business_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+        # Create XML with business information using timestamp UUID
+        business_xml = f'''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>UPDATE</ActionType>
-            <UUID>54321</UUID>
-            <TimeOfAction>2023-01-01T12:00:00</TimeOfAction>
-            <FirstName>Business</FirstName>
-            <LastName>Customer</LastName>
+            <UUID>{self.timestamp_id}</UUID>
+            <TimeOfAction>2023-04-23T11:22:33.445566Z</TimeOfAction>
             <Business>
                 <BusinessName>Test Company BV</BusinessName>
                 <BusinessEmail>company@example.com</BusinessEmail>

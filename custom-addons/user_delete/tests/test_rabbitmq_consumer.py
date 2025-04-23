@@ -14,21 +14,21 @@ class TestUserDeleteConsumer(TransactionCase):
         # Create a mock environment for the thread
         self.thread = UserDeleteThread(self.env)
         
-        # Create a test customer with external_id
+        # Create a test customer with timestamp-based external_id
         self.test_customer = self.env['res.partner'].create({
             'name': 'Test Customer for Deletion',
             'email': 'test@example.com',
-            'external_id': '12345'
+            'external_id': '2023-04-23T10:20:30.123456Z'  # Updated to timestamp format
         })
 
     def test_valid_delete_message(self):
         """Test processing a valid DELETE message"""
-        # Create valid XML message
+        # Create valid XML message with timestamp UUID
         valid_xml = '''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>DELETE</ActionType>
-            <UUID>12345</UUID>
-            <TimeOfAction>2023-01-01T12:00:00</TimeOfAction>
+            <UUID>2023-04-23T10:20:30.123456Z</UUID>
+            <TimeOfAction>2023-04-23T10:20:30.123456Z</TimeOfAction>
         </UserMessage>
         '''
         
@@ -52,8 +52,8 @@ class TestUserDeleteConsumer(TransactionCase):
         invalid_xml = '''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>DELETE</ActionType>
-            <UUID>12345</UUID>
-            <TimeOfAction>2023-01-01T12:00:00
+            <UUID>2023-04-23T10:20:30.123456Z</UUID>
+            <TimeOfAction>2023-04-23T10:20:30
         </UserMessage>
         '''
         
@@ -65,8 +65,8 @@ class TestUserDeleteConsumer(TransactionCase):
         non_delete_xml = '''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>UPDATE</ActionType>
-            <UUID>12345</UUID>
-            <TimeOfAction>2023-01-01T12:00:00</TimeOfAction>
+            <UUID>2023-04-23T10:20:30.123456Z</UUID>
+            <TimeOfAction>2023-04-23T10:20:30.123456Z</TimeOfAction>
         </UserMessage>
         '''
         
@@ -78,34 +78,37 @@ class TestUserDeleteConsumer(TransactionCase):
         missing_elem_xml = '''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>DELETE</ActionType>
-            <TimeOfAction>2023-01-01T12:00:00</TimeOfAction>
+            <TimeOfAction>2023-04-23T10:20:30.123456Z</TimeOfAction>
         </UserMessage>
         '''
         
         result = self.thread._process_message(missing_elem_xml.encode('utf-8'), 'test_queue')
         self.assertFalse(result)
 
-    def test_non_integer_uuid(self):
-        """Test processing UUID that is not an integer"""
-        non_int_uuid_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+    def test_invalid_datetime_format(self):
+        """Test processing UUID that is not a valid dateTime format"""
+        invalid_datetime_xml = '''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>DELETE</ActionType>
-            <UUID>abc123</UUID>
-            <TimeOfAction>2023-01-01T12:00:00</TimeOfAction>
+            <UUID>not-a-valid-datetime</UUID>
+            <TimeOfAction>2023-04-23T10:20:30.123456Z</TimeOfAction>
         </UserMessage>
         '''
         
-        result = self.thread._process_message(non_int_uuid_xml.encode('utf-8'), 'test_queue')
+        result = self.thread._process_message(invalid_datetime_xml.encode('utf-8'), 'test_queue')
         self.assertFalse(result)
 
     def test_admin_user_protection(self):
         """Test that admin users (ID ≤ 2) are protected from deletion"""
+        # Create test admin user with timestamp external_id
+        admin_timestamp = '2023-04-23T11:22:33.445566Z'
+        
         # Create XML message targeting admin user
-        admin_delete_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+        admin_delete_xml = f'''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>DELETE</ActionType>
-            <UUID>1</UUID>
-            <TimeOfAction>2023-01-01T12:00:00</TimeOfAction>
+            <UUID>{admin_timestamp}</UUID>
+            <TimeOfAction>2023-04-23T10:20:30.123456Z</TimeOfAction>
         </UserMessage>
         '''
         
@@ -117,6 +120,7 @@ class TestUserDeleteConsumer(TransactionCase):
             admin_user.id = 1
             admin_user.name = "Admin"
             admin_user.email = "admin@example.com"
+            admin_user.external_id = admin_timestamp
             
             mock_env_obj = MagicMock()
             mock_env_obj.__getitem__.return_value.sudo.return_value.search.return_value = admin_user

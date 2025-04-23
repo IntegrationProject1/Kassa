@@ -10,21 +10,24 @@ class TestUserCreatePublisher(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        # Create a test partner
+        # Create a test partner with timestamp-based external_id
         self.test_partner = self.env['res.partner'].create({
             'name': 'Test Customer',
             'email': 'test@example.com',
             'phone': '+32123456789',
             'customer_rank': 1,
-            'external_id': '54321'
+            'external_id': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")  # Updated to timestamp format
         })
 
     def test_create_customer_create_message(self):
         """Test creation of XML message for customer creation"""
+        # Use timestamp format for UUID
+        timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         partner_data = {
             'ActionType': 'CREATE',
-            'UUID': 12345,
-            'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            'UUID': timestamp,
+            'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            'EncryptedPassword': 'odooadmin',  # Added required element
             'FirstName': 'John',
             'LastName': 'Doe',
             'PhoneNumber': '+32123456789',
@@ -48,7 +51,8 @@ class TestUserCreatePublisher(TransactionCase):
         
         # Check regular elements
         self.assertEqual(root.find('ActionType').text, 'CREATE')
-        self.assertEqual(root.find('UUID').text, '12345')
+        self.assertEqual(root.find('UUID').text, timestamp)
+        self.assertEqual(root.find('EncryptedPassword').text, 'odooadmin')
         self.assertEqual(root.find('FirstName').text, 'John')
         self.assertEqual(root.find('LastName').text, 'Doe')
         self.assertEqual(root.find('PhoneNumber').text, '+32123456789')
@@ -65,12 +69,13 @@ class TestUserCreatePublisher(TransactionCase):
 
     def test_validate_xml_against_xsd(self):
         """Test XML validation against XSD schema"""
-        # Create a valid XML message
+        # Create a valid XML message with timestamp UUID
         valid_xml = '''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>CREATE</ActionType>
-            <UUID>12345</UUID>
-            <TimeOfAction>2023-05-15T10:30:00Z</TimeOfAction>
+            <UUID>2023-05-15T10:30:00.123456Z</UUID>
+            <TimeOfAction>2023-05-15T10:30:00.123456Z</TimeOfAction>
+            <EncryptedPassword>odooadmin</EncryptedPassword>
             <FirstName>John</FirstName>
             <LastName>Doe</LastName>
         </UserMessage>'''
@@ -83,11 +88,24 @@ class TestUserCreatePublisher(TransactionCase):
         invalid_xml = '''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>CREATE</ActionType>
-            <TimeOfAction>2023-05-15T10:30:00Z</TimeOfAction>
+            <TimeOfAction>2023-05-15T10:30:00.123456Z</TimeOfAction>
         </UserMessage>'''
         
         # Test validation fails
         is_valid = self.test_partner.validate_xml_against_xsd(invalid_xml, USER_CREATE_XSD)
+        self.assertFalse(is_valid)
+        
+        # Create an invalid XML message (invalid UUID format)
+        invalid_uuid_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+        <UserMessage>
+            <ActionType>CREATE</ActionType>
+            <UUID>not-a-timestamp</UUID>
+            <TimeOfAction>2023-05-15T10:30:00.123456Z</TimeOfAction>
+            <EncryptedPassword>odooadmin</EncryptedPassword>
+        </UserMessage>'''
+        
+        # Test validation fails for invalid UUID format
+        is_valid = self.test_partner.validate_xml_against_xsd(invalid_uuid_xml, USER_CREATE_XSD)
         self.assertFalse(is_valid)
 
     @patch('pika.BlockingConnection')
@@ -97,11 +115,13 @@ class TestUserCreatePublisher(TransactionCase):
         mock_channel = MagicMock()
         mock_connection.return_value.channel.return_value = mock_channel
         
-        # Sample partner data
+        # Sample partner data with timestamp UUID
+        timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         partner_data = {
             'ActionType': 'CREATE',
-            'UUID': 54321,
-            'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            'UUID': timestamp,
+            'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            'EncryptedPassword': 'odooadmin',
             'FirstName': 'Test',
             'LastName': 'Customer',
             'PhoneNumber': '+32123456789',
@@ -165,4 +185,4 @@ class TestUserCreatePublisher(TransactionCase):
         self.assertNotEqual(partner1.external_id, partner2.external_id)
         
         # Verify the second ID is greater than the first
-        self.assertGreater(int(partner2.external_id), int(partner1.external_id))
+        self.assertGreater(int(partner2.external_id.split('-')[0]), int(partner1.external_id.split('-')[0]))

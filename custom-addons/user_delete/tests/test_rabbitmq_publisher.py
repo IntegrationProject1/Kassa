@@ -1,8 +1,10 @@
 import unittest
 from unittest.mock import patch, MagicMock
 from odoo.tests.common import TransactionCase
+from datetime import datetime
 import xml.etree.ElementTree as ET
 import pika
+from odoo.addons.user_delete.models.rabbitmq_publisher import USER_MESSAGE_XSD
 
 class TestRabbitMQPublisher(TransactionCase):
 
@@ -10,12 +12,16 @@ class TestRabbitMQPublisher(TransactionCase):
         super().setUp()
         # Get publisher model
         self.publisher = self.env['customer.delete.rabbitmq.publisher']
-        # Create test customer
+        
+        # Create timestamp for external_id
+        self.timestamp_id = '2023-04-23T10:20:30.123456Z'
+        
+        # Create test customer with timestamp external_id
         self.test_customer = self.env['res.partner'].create({
             'name': 'Test Delete Customer',
             'email': 'test.delete@example.com',
             'customer_rank': 1,
-            'external_id': '12345'
+            'external_id': self.timestamp_id
         })
 
     def test_create_customer_delete_message(self):
@@ -33,34 +39,50 @@ class TestRabbitMQPublisher(TransactionCase):
         
         # Check required elements exist
         self.assertEqual(root.find('ActionType').text, 'DELETE')
-        self.assertEqual(root.find('UUID').text, '12345')  # Should use external_id
+        self.assertEqual(root.find('UUID').text, self.timestamp_id)  # Should use timestamp external_id
         
-        # Verify TimeOfAction is present (exact value will vary)
-        self.assertIsNotNone(root.find('TimeOfAction').text)
+        # Verify TimeOfAction is present and is in timestamp format
+        time_of_action = root.find('TimeOfAction').text
+        self.assertIsNotNone(time_of_action)
+        self.assertIn('T', time_of_action)
+        self.assertIn(':', time_of_action)
+        self.assertIn('-', time_of_action)
 
     def test_validate_xml_against_xsd(self):
         """Test XML validation against XSD schema"""
-        # Create a valid XML message
+        # Create a valid XML message with timestamp UUID
         valid_xml = '''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>DELETE</ActionType>
-            <UUID>12345</UUID>
-            <TimeOfAction>2023-05-15T10:30:00Z</TimeOfAction>
+            <UUID>2023-04-23T10:20:30.123456Z</UUID>
+            <TimeOfAction>2023-05-15T10:30:00.123456Z</TimeOfAction>
         </UserMessage>'''
         
         # Test validation passes
-        is_valid = self.publisher.validate_xml_against_xsd(valid_xml, self.publisher._name)
+        is_valid = self.publisher.validate_xml_against_xsd(valid_xml, USER_MESSAGE_XSD)
         self.assertTrue(is_valid)
         
         # Create an invalid XML message (missing required element)
         invalid_xml = '''<?xml version="1.0" encoding="UTF-8"?>
         <UserMessage>
             <ActionType>DELETE</ActionType>
-            <TimeOfAction>2023-05-15T10:30:00Z</TimeOfAction>
+            <TimeOfAction>2023-05-15T10:30:00.123456Z</TimeOfAction>
         </UserMessage>'''
         
-        # Test validation fails
-        is_valid = self.publisher.validate_xml_against_xsd(invalid_xml, self.publisher._name)
+        # Test validation fails for missing element
+        is_valid = self.publisher.validate_xml_against_xsd(invalid_xml, USER_MESSAGE_XSD)
+        self.assertFalse(is_valid)
+        
+        # Create an invalid XML message (invalid UUID format)
+        invalid_uuid_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+        <UserMessage>
+            <ActionType>DELETE</ActionType>
+            <UUID>not-a-timestamp</UUID>
+            <TimeOfAction>2023-05-15T10:30:00.123456Z</TimeOfAction>
+        </UserMessage>'''
+        
+        # Test validation fails for invalid UUID format
+        is_valid = self.publisher.validate_xml_against_xsd(invalid_uuid_xml, USER_MESSAGE_XSD)
         self.assertFalse(is_valid)
 
     @patch('pika.BlockingConnection')
@@ -96,7 +118,7 @@ class TestRabbitMQPublisher(TransactionCase):
             # Delete the test customer
             self.test_customer.unlink()
             
-            # Verify the publish method was called
+            # Verify the publish method was called with timestamp external_id
             mock_publish.assert_called_once_with(
                 self.test_customer.id, self.test_customer.external_id
             )
