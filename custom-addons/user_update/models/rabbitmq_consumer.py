@@ -39,7 +39,7 @@ XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
         <xs:complexType>
             <xs:sequence>
                 <xs:element name="ActionType" type="xs:string"/>
-                <xs:element name="UUID" type="xs:int"/>
+                <xs:element name="UUID" type="xs:dateTime"/>
                 <xs:element name="TimeOfAction" type="xs:dateTime"/>
                 <xs:element name="EncryptedPassword" type="xs:string" minOccurs="0"/>
                 <xs:element name="FirstName" type="xs:string" minOccurs="0"/>
@@ -261,14 +261,14 @@ class CustomerUpdateThread(threading.Thread):
                 return None
                 
             customer_data['action_type'] = action_type_elem.text
-            
-            # Store UUID as customer_id (ensure it's an integer)
+
+            # Store UUID as customer_id (now as a timestamp string)
             try:
-                uuid_value = int(uuid_elem.text)
-                customer_data['customer_id'] = str(uuid_value)  # Convert to string for consistency
-                log_message(f"Parsed UUID: {uuid_value} (stored as: {customer_data['customer_id']})")
+                # Store it as a string directly - no need to convert to int
+                customer_data['customer_id'] = uuid_elem.text
+                log_message(f"Parsed UUID timestamp: {customer_data['customer_id']}")
             except (ValueError, TypeError):
-                log_message(f"Error: UUID must be an integer, received: {uuid_elem.text}")
+                log_message(f"Error: UUID must be a valid dateTime, received: {uuid_elem.text}")
                 return None
             
             customer_data['time_of_action'] = time_of_action_elem.text
@@ -322,10 +322,10 @@ class CustomerUpdateThread(threading.Thread):
             for i, customer in enumerate(all_customers):
                 log_message(f"  Customer {i+1}: ID={customer.id}, Name={customer.name}, Email={customer.email}, External ID={customer.external_id}")
             
-            # Try to find the customer by ID or email
+            # Update the customer lookup code in _process_customer_data
             customer_id = customer_data.get('customer_id')
             log_message(f"Looking for customer with UUID (external_id): {customer_id}")
-            
+
             # First, try to find by external_id (highest priority)
             customer = partner_model.search([
                 ('external_id', '=', customer_id)

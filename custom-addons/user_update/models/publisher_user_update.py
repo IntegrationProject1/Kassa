@@ -29,7 +29,7 @@ USER_UPDATE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
         <xs:complexType>
             <xs:sequence>
                 <xs:element name="ActionType" type="xs:string"/>
-                <xs:element name="UUID" type="xs:int"/>
+                <xs:element name="UUID" type="xs:dateTime"/>
                 <xs:element name="TimeOfAction" type="xs:dateTime"/>
                 <xs:element name="EncryptedPassword" type="xs:string" minOccurs="0"/>
                 <xs:element name="FirstName" type="xs:string" minOccurs="0"/>
@@ -198,21 +198,13 @@ class ResPartner(models.Model):
         # If this is a customer and we're adding customer_rank but there's no external_id, generate one
         if vals.get('customer_rank', 0) > 0:
             for record in self.filtered(lambda r: not r.external_id):
-                # Find the highest existing external_id that is numeric
-                last_id = 0
-                partners_with_ext_id = self.search([('external_id', '!=', False)])
-                for partner in partners_with_ext_id:
-                    try:
-                        ext_id_num = int(partner.external_id)
-                        if ext_id_num > last_id:
-                            last_id = ext_id_num
-                    except (ValueError, TypeError):
-                        pass  # Skip non-numeric external_ids
+                # Generate timestamp with microsecond precision for external_id
+                timestamp_id = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
                 
-                # Set the next external_id
+                # Set the timestamp as external_id
                 if 'external_id' not in vals:
-                    vals['external_id'] = str(last_id + 1)
-                    log_message(f"Generated new external_id on update: {vals['external_id']}")
+                    vals['external_id'] = timestamp_id
+                    log_message(f"Generated new timestamp-based external_id on update: {vals['external_id']}")
         
         # Check if any of these partners were recently created
         partners_to_skip = []
@@ -241,18 +233,15 @@ class ResPartner(models.Model):
             partners_to_update = self.env['res.partner'].browse(partners_to_process)
             
             for partner in partners_to_update:
-                # Try to convert external_id to integer, fallback to ID if not possible
-                try:
-                    uuid_value = int(partner.external_id) if partner.external_id else partner.id
-                except (ValueError, TypeError):
-                    uuid_value = partner.id
-                    log_message(f"Warning: Could not convert external_id '{partner.external_id}' to int, using ID: {partner.id}")
+                # Generate timestamp with microsecond precision
+                uuid_timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
                 
                 # Basic customer data
                 partner_data = {
                     'ActionType': 'UPDATE',
-                    'UUID': uuid_value,  # Changed from UserID to UUID, ensure it's an integer
-                    'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    'UUID': uuid_timestamp,  # Using timestamp with microsecond precision
+                    'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),  # Also using microsecond precision
+                    'EncryptedPassword': 'odooadmin',  # Standard password as requested
                     'FirstName': partner.name.split(' ')[0] if partner.name else '',
                     'LastName': ' '.join(partner.name.split(' ')[1:]) if partner.name and ' ' in partner.name else '',
                     'PhoneNumber': partner.phone or '',

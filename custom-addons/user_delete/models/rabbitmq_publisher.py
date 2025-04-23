@@ -20,7 +20,7 @@ USER_MESSAGE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
         <xs:complexType>
             <xs:sequence>
                 <xs:element name="ActionType" type="xs:string"/>
-                <xs:element name="UUID" type="xs:int"/>
+                <xs:element name="UUID" type="xs:dateTime"/>
                 <xs:element name="TimeOfAction" type="xs:dateTime"/>
             </xs:sequence>
         </xs:complexType>
@@ -71,21 +71,23 @@ class RabbitMQPublisher(models.AbstractModel):
         action_type = ET.SubElement(root, "ActionType")
         action_type.text = "DELETE"
         
-        # Convert the ID to an integer first
-        try:
-            if external_id:
-                uuid_value = int(external_id)
-            else:
-                uuid_value = int(customer_id)
-        except (ValueError, TypeError):
-            uuid_value = int(customer_id)  # Fall back to numeric ID
-            log_message(f"Warning: Could not convert external_id '{external_id}' to int, using ID: {customer_id}")
+        # Use external_id directly if available, or generate new timestamp
+        uuid_value = None
+        if external_id:
+            # Check if external_id is already in timestamp format
+            if 'T' in external_id and '-' in external_id:
+                uuid_value = external_id
+        
+        # If no valid external_id, generate a new timestamp
+        if not uuid_value:
+            uuid_value = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            log_message(f"Generated new timestamp for UUID: {uuid_value}")
         
         uuid_elem = ET.SubElement(root, "UUID")
-        uuid_elem.text = str(uuid_value)
+        uuid_elem.text = uuid_value
         
         time_of_action = ET.SubElement(root, "TimeOfAction")
-        time_of_action.text = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        time_of_action.text = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")  # With microsecond precision
         
         # Convert to XML string
         xml_string = ET.tostring(root, encoding='utf-8', method='xml').decode('utf-8')
@@ -100,20 +102,10 @@ class RabbitMQPublisher(models.AbstractModel):
     def publish_customer_delete(self, customer_id, external_id=None):
         """Publish customer deletion message to all other service queues"""
         try:
-            # Try to convert external_id to integer for UUID field
-            try:
-                if external_id:
-                    uuid_value = int(external_id)
-                    identifier = external_id
-                else:
-                    uuid_value = int(customer_id)
-                    identifier = customer_id
-            except (ValueError, TypeError):
-                uuid_value = int(customer_id)
-                identifier = customer_id
-                log_message(f"Warning: Could not convert external_id '{external_id}' to int, using ID: {customer_id}")
+            # Use external_id directly if available
+            identifier = external_id if external_id else str(customer_id)
             
-            log_message(f"Publishing customer deletion message for UUID: {uuid_value} (identifier: {identifier})")
+            log_message(f"Publishing customer deletion message for identifier: {identifier}")
             
             # Update target queues to be customer-focused
             target_queues = [

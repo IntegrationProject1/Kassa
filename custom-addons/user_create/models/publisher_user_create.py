@@ -29,8 +29,9 @@ USER_CREATE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
         <xs:complexType>
             <xs:sequence>
                 <xs:element name="ActionType" type="xs:string"/>
-                <xs:element name="UUID" type="xs:int"/>
+                <xs:element name="UUID" type="xs:dateTime"/>
                 <xs:element name="TimeOfAction" type="xs:dateTime"/>
+                <xs:element name="EncryptedPassword" type="xs:string"/>
                 <xs:element name="FirstName" type="xs:string" minOccurs="0"/>
                 <xs:element name="LastName" type="xs:string" minOccurs="0"/>
                 <xs:element name="PhoneNumber" type="xs:string" minOccurs="0"/>
@@ -141,6 +142,7 @@ class ResPartner(models.Model):
             
             # Create the message
             message = self.create_customer_create_message(partner_data)
+            log_message(f"Sending XML message: \n{message}")
             
             # Connect to RabbitMQ
             connection = pika.BlockingConnection(self._get_rabbitmq_connection_params())
@@ -190,32 +192,22 @@ class ResPartner(models.Model):
         """Override the create method to send customer data to RabbitMQ."""
         log_message("Creating a new partner...")
         
-        # Generate an auto-incremented external_id if this is a customer
+        # Generate timestamp with microsecond precision for external_id if this is a customer
         if vals.get('customer_rank', 0) > 0 and not vals.get('external_id'):
-            # Find the highest existing external_id that is numeric
-            last_id = 0
-            partners_with_ext_id = self.search([('external_id', '!=', False)])
-            for partner in partners_with_ext_id:
-                try:
-                    ext_id_num = int(partner.external_id)
-                    if ext_id_num > last_id:
-                        last_id = ext_id_num
-                except (ValueError, TypeError):
-                    pass  # Skip non-numeric external_ids
-            
-            # Set the next external_id
-            vals['external_id'] = str(last_id + 1)
-            log_message(f"Generated new external_id: {vals['external_id']}")
+            # Use timestamp format for external_id
+            timestamp_id = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            vals['external_id'] = timestamp_id
+            log_message(f"Generated new timestamp-based external_id: {timestamp_id}")
         
-        # Set a context flag for the child write operations
-        ctx = dict(self.env.context, creating_new_partner=True)
+        # Set context flags for write operations to prevent duplicate messages
+        ctx = dict(self.env.context, creating_new_partner=True, skip_rabbitmq_publish=True)
         
         # Create the partner with our special context
         partner = super(ResPartner, self.with_context(ctx)).create(vals)
         
-        # Check if we should skip publishing (when created from RabbitMQ)
+        # Check if we should skip publishing (when created from RabbitMQ or not a customer)
         if self.env.context.get('skip_rabbitmq_publish'):
-            log_message(f"Skipping RabbitMQ publish for partner {partner.id} (created from RabbitMQ)")
+            log_message(f"Skipping RabbitMQ publish for partner {partner.id} (context flag)")
             return partner
         
         # CRITICAL: Only send messages for actual customers
@@ -235,20 +227,25 @@ class ResPartner(models.Model):
                 # Clean up both sets
                 if partner.id in self._recently_created_ids:
                     self._recently_created_ids.discard(partner.id)
-                prevention_registry.recently_created_partners.discard(partner.id)
+                if partner.id in prevention_registry.recently_created_partners:
+                    prevention_registry.recently_created_partners.discard(partner.id)
                 log_message(f"Removed customer ID {partner.id} from prevention registry")
             except Exception as e:
                 log_message(f"Error in cleanup: {e}")
         
-        # Schedule cleanup after 10 seconds
-        threading.Timer(10.0, cleanup_ids).start()
+        # Schedule cleanup after 30 seconds (increased from 10)
+        threading.Timer(30.0, cleanup_ids).start()
         
         try:
+            # Generate timestamp with microsecond precision
+            uuid_timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            
             # Prepare customer data
             partner_data = {
                 'ActionType': 'CREATE',
-                'UUID': int(partner.external_id or partner.id),  # Changed UserID to UUID, ensure it's an integer
-                'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                'UUID': partner.external_id or uuid_timestamp,  # Use existing external_id if available
+                'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                'EncryptedPassword': 'odooadmin',
                 'FirstName': partner.name.split(' ')[0] if partner.name else '',
                 'LastName': ' '.join(partner.name.split(' ')[1:]) if partner.name and ' ' in partner.name else '',
                 'PhoneNumber': partner.phone or '',
@@ -262,7 +259,7 @@ class ResPartner(models.Model):
                     'BusinessName': business_name or '',
                     'BusinessEmail': partner.email or '',
                     'RealAddress': f"{partner.street or ''}, {partner.city or ''}, {partner.zip or ''}" if any([partner.street, partner.city, partner.zip]) else '',
-                    'BTWNumber': partner.vat or vals.get('vat', ''),
+                    'BTWNumber': partner.vat or '',
                     'FacturationAddress': f"{partner.street2 or ''}, {partner.city or ''}, {partner.zip or ''}" if any([partner.street2, partner.city, partner.zip]) else '',
                 }
                 
@@ -272,6 +269,7 @@ class ResPartner(models.Model):
 
             # Send the RabbitMQ message
             self.publish_customer_create(partner_data)
+            log_message(f"Published CREATE message for customer {partner.id}")
             
         except Exception as e:
             log_message(f"Error preparing or sending customer create message: {e}")

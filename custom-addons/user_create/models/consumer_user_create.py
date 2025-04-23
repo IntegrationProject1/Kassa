@@ -36,7 +36,7 @@ XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
         <xs:complexType>
             <xs:sequence>
                 <xs:element name="ActionType" type="xs:string"/>
-                <xs:element name="UUID" type="xs:int"/>
+                <xs:element name="UUID" type="xs:dateTime"/>
                 <xs:element name="TimeOfAction" type="xs:dateTime"/>
                 <xs:element name="EncryptedPassword" type="xs:string" minOccurs="0"/>
                 <xs:element name="FirstName" type="xs:string" minOccurs="0"/>
@@ -259,11 +259,15 @@ class CustomerCreateThread(threading.Thread):
                 return None
                 
             customer_data['action_type'] = action_type_elem.text
-            # Convert UUID to integer and then back to string for consistency with existing code
+            # Handle UUID as a dateTime timestamp instead of an integer
             try:
-                customer_data['customer_id'] = str(int(user_id_elem.text))
+                # Store the UUID as a timestamp string
+                customer_data['customer_id'] = user_id_elem.text
+                # You could also parse it to a datetime object if needed
+                # import datetime
+                # customer_data['uuid_datetime'] = datetime.datetime.fromisoformat(user_id_elem.text.replace('Z', '+00:00'))
             except (ValueError, TypeError):
-                log_message(f"Error: UUID must be an integer, received: {user_id_elem.text}")
+                log_message(f"Error: UUID must be a valid dateTime, received: {user_id_elem.text}")
                 return None
                 
             customer_data['time_of_action'] = time_of_action_elem.text
@@ -418,4 +422,4 @@ class ResPartner(models.Model):
     external_id = fields.Char(string="External ID", 
                              help="External identifier for integration with other systems",
                              index=True)
-        
+

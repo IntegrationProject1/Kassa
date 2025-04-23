@@ -35,7 +35,7 @@ XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
         <xs:complexType>
             <xs:sequence>
                 <xs:element name="ActionType" type="xs:string"/>
-                <xs:element name="UUID" type="xs:int"/>
+                <xs:element name="UUID" type="xs:dateTime"/>
                 <xs:element name="TimeOfAction" type="xs:dateTime"/>
             </xs:sequence>
         </xs:complexType>
@@ -250,17 +250,13 @@ class UserDeleteThread(threading.Thread):
                         log_message(f"Not a DELETE action: '{action_type.text}'")
                         return False
                     
-                    # Ensure UUID is an integer
-                    try:
-                        uuid_value = int(uuid_elem.text.strip())
-                        log_message(f"Processing delete request for UUID: {uuid_value}")
-                    except (ValueError, TypeError):
-                        log_message(f"Error: UUID must be an integer, received: {uuid_elem.text}")
-                        return False
+                    # Use UUID as timestamp string
+                    uuid_value = uuid_elem.text.strip()
+                    log_message(f"Processing delete request for UUID timestamp: {uuid_value}")
                     
                     # Search by external_id (highest priority)
                     customer = env['res.partner'].sudo().search([
-                        ('external_id', '=', str(uuid_value))
+                        ('external_id', '=', uuid_value)
                     ], limit=1)
                     
                     if customer:
