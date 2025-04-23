@@ -6,5 +6,6 @@
     'author': 'Jente',
     'depends': ['base'],
     'installable': True,
+    'auto_install': True,
     'application': False,
 }
