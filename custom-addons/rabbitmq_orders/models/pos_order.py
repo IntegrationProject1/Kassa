@@ -2,7 +2,7 @@ import pika
 import logging
 import xml.etree.ElementTree as ET
 from datetime import datetime
-from odoo import models, api
+from odoo import models, fields, api
 import os
 from lxml import etree
 
@@ -11,6 +11,8 @@ _logger = logging.getLogger(__name__)
 def log_message(message):
     print(f"[ORDER_MODULE] {message}")
     _logger.info(message)
+
+print("[ORDER_MODULE] Starting Order RabbitMQ Publisher...")
 
 # XSD Schema for Order Messages
 ORDER_MESSAGE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -86,59 +88,12 @@ class OrderRabbitMQPublisher(models.AbstractModel):
             log_message(f"XML validation error: {e}")
             return False
 
-    def create_order_message(self, order, action_type):
-        root = ET.Element("Order")
-        ET.SubElement(root, "ActionType").text = action_type
-        ET.SubElement(root, "OrderID").text = str(order.id)
-        ET.SubElement(root, "Date").text = order.date_order.strftime("%Y-%m-%dT%H:%M:%SZ")
-        ET.SubElement(root, "User").text = order.user_id.name or ""
-        ET.SubElement(root, "Customer").text = order.partner_id.name if order.partner_id else ""
-        
-        total_amount = abs(order.amount_total) if action_type == "refunded" else order.amount_total
-        ET.SubElement(root, "TotalAmount").text = f"{total_amount:.2f}"
-
-        if action_type in ["create", "refunded"]:
-            products = ET.SubElement(root, "Products")
-            for line in order.lines:
-                product = ET.SubElement(products, "Product")
-                ET.SubElement(product, "ProductName").text = line.product_id.name
-                qty = abs(line.qty) if action_type == "refunded" else line.qty
-                ET.SubElement(product, "Quantity").text = f"{qty:.2f}"
-                price = abs(line.price_unit) if action_type == "refunded" else line.price_unit
-                ET.SubElement(product, "UnitPrice").text = f"{price:.2f}"
-                subtotal = abs(line.price_subtotal) if action_type == "refunded" else line.price_subtotal
-                ET.SubElement(product, "TotalPrice").text = f"{subtotal:.2f}"
-
-            payments = ET.SubElement(root, "Payments")
-            for payment in order.payment_ids:
-                pmt = ET.SubElement(payments, "Payment")
-                ET.SubElement(pmt, "PaymentMethod").text = payment.payment_method_id.name
-                amount = abs(payment.amount) if action_type == "refunded" else payment.amount
-                ET.SubElement(pmt, "Amount").text = f"{amount:.2f}"
-
-            taxes = abs(order.amount_tax) if action_type == "refunded" else order.amount_tax
-            ET.SubElement(root, "Taxes").text = f"{taxes:.2f}"
-            total_paid = abs(order.amount_paid) if action_type == "refunded" else order.amount_paid
-            ET.SubElement(root, "TotalPaid").text = f"{total_paid:.2f}"
-
-        xml_str = ET.tostring(root, encoding='unicode')
-        if not self.validate_xml_against_xsd(xml_str):
-            log_message("Generated order XML failed XSD validation")
-        return xml_str
-
-    def publish_order_event(self, order, action_type):
+    def _publish_message(self, message, queue_name):
         try:
-            if order.amount_total < 0 and action_type == "create":
-                action_type = "refunded"
-                log_message(f"Auto-corrected action_type to 'refunded' for order {order.id}")
-
-            message = self.create_order_message(order, action_type)
-            queue_name = "order.created" if action_type == "create" else "order.refunded"
-            routing_key = queue_name
-
             connection = pika.BlockingConnection(self._get_rabbitmq_connection_params())
             channel = connection.channel()
 
+            routing_key = queue_name
             channel.exchange_declare(exchange='billing', exchange_type='topic', durable=True)
             channel.queue_declare(queue=queue_name, durable=True)
             channel.queue_bind(exchange='billing', queue=queue_name, routing_key=routing_key)
@@ -152,10 +107,37 @@ class OrderRabbitMQPublisher(models.AbstractModel):
                     content_type='application/xml'
                 )
             )
-            log_message(f"Published order {order.id} to {queue_name}")
+            log_message(f"Published order to {queue_name}")
             connection.close()
         except Exception as e:
-            log_message(f"Error publishing order event: {e}")
+            log_message(f"Error publishing order message: {e}")
+
+    def create_order_message(self, order):
+        root = ET.Element("Order")
+        ET.SubElement(root, "ActionType").text = "create"
+        ET.SubElement(root, "OrderID").text = str(order.id)
+        ET.SubElement(root, "Date").text = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        ET.SubElement(root, "User").text = order.user_id.name or ""
+        ET.SubElement(root, "Customer").text = order.partner_id.name if order.partner_id else ""
+        ET.SubElement(root, "TotalAmount").text = f"{order.amount_total:.2f}"
+
+        products = ET.SubElement(root, "Products")
+        for line in order.lines:
+            product = ET.SubElement(products, "Product")
+            ET.SubElement(product, "ProductName").text = line.product_id.name
+            ET.SubElement(product, "Quantity").text = f"{line.qty:.2f}"
+            ET.SubElement(product, "UnitPrice").text = f"{line.price_unit:.2f}"
+            ET.SubElement(product, "TotalPrice").text = f"{line.price_subtotal:.2f}"
+
+        xml_str = ET.tostring(root, encoding='unicode')
+        if not self.validate_xml_against_xsd(xml_str):
+            log_message("Generated order XML failed XSD validation")
+        return xml_str
+
+    def publish_order_event(self, order):
+        log_message(f"Preparing to publish individual order ID {order.id}")
+        message = self.create_order_message(order)
+        self._publish_message(message, queue_name="order.created")
 
 class PosOrder(models.Model):
     _inherit = 'pos.order'
@@ -163,11 +145,17 @@ class PosOrder(models.Model):
     @api.model
     def create(self, vals):
         order = super().create(vals)
-        self.env['order.rabbitmq.publisher'].publish_order_event(order, 'create')
+        self.env['order.rabbitmq.publisher'].publish_order_event(order)
         return order
 
-    def action_pos_order_refund(self):
-        result = super().action_pos_order_refund()
-        for order in self:
-            self.env['order.rabbitmq.publisher'].publish_order_event(order, 'refunded')
+class PosSession(models.Model):
+    _inherit = 'pos.session'
+
+    def action_pos_session_close(self, balancing_account=False, amount_to_balance=0.0, bank_payment_method_diffs=None):
+        log_message(f"POS session '{self.name}' is being closed.")
+        result = super().action_pos_session_close(
+            balancing_account,
+            amount_to_balance,
+            bank_payment_method_diffs
+        )
         return result
