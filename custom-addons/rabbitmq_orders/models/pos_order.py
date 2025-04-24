@@ -134,6 +134,13 @@ class OrderRabbitMQPublisher(models.AbstractModel):
             log_message("Generated order XML failed XSD validation")
         return xml_str
 
+    def publish_orders_for_session(self, session):
+        log_message(f"Publishing orders for session: {session.name}")
+        for order in session.order_ids.filtered(lambda o: o.state == 'done'):
+            log_message(f"[DEBUG] Order {order.id} has state: {order.state}")
+            self.publish_order_event(order)
+
+
     def publish_order_event(self, order):
         log_message(f"Preparing to publish individual order ID {order.id}")
         message = self.create_order_message(order)
@@ -145,17 +152,26 @@ class PosOrder(models.Model):
     @api.model
     def create(self, vals):
         order = super().create(vals)
-        self.env['order.rabbitmq.publisher'].publish_order_event(order)
+        # Do not send to RabbitMQ yet; wait for session close
+        log_message(f"Order {order.id} created but not published (will publish on session close).")
         return order
 
 class PosSession(models.Model):
     _inherit = 'pos.session'
 
+    def action_pos_session_open(self):
+        log_message(f"POS session '{self.name}' is being opened.")
+        return super().action_pos_session_open()
+
     def action_pos_session_close(self, balancing_account=False, amount_to_balance=0.0, bank_payment_method_diffs=None):
-        log_message(f"POS session '{self.name}' is being closed.")
         result = super().action_pos_session_close(
             balancing_account,
             amount_to_balance,
             bank_payment_method_diffs
         )
+        for session in self:
+            log_message(f"POS session '{session.name}' is fully closed. Now publishing orders.")
+            self.env['order.rabbitmq.publisher'].publish_orders_for_session(session)
         return result
+
+
