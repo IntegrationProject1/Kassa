@@ -5,7 +5,9 @@ import datetime
 import socket
 import logging
 import xml.etree.ElementTree as ET
+from lxml import etree
 import os
+import io
 from odoo import models, api, fields
 
 _logger = logging.getLogger(__name__)
@@ -15,9 +17,22 @@ RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST')
 RABBITMQ_USER = os.environ.get('RABBITMQ_USER')
 RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
 RABBITMQ_PORT = int(os.environ.get('RABBITMQ_PORT'))
-EXCHANGE_NAME = 'heartbeat'
+EXCHANGE_NAME = 'heartbeat_monitoring'  # Updated exchange name
 QUEUE_NAME = 'controlroom.heartbeat.ping'
+ROUTING_KEY = 'controlroom.heartbeat.ping'  # Updated routing key
 HEARTBEAT_INTERVAL = 1
+
+# Heartbeat XSD Schema
+HEARTBEAT_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="Heartbeat">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="ServiceName" type="xs:string"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>'''
 
 # Global heartbeat thread
 heartbeat_thread = None
@@ -36,6 +51,13 @@ class HeartbeatThread(threading.Thread):
         super().__init__()
         self.daemon = True  # Ensures thread stops when Odoo stops
         self.running = True
+        self.xsd_schema = None
+        try:
+            xsd_root = etree.parse(io.StringIO(HEARTBEAT_XSD))
+            self.xsd_schema = etree.XMLSchema(xsd_root)
+            log_message("XSD schema for heartbeat validation loaded successfully")
+        except Exception as e:
+            log_message(f"Error loading XSD schema: {str(e)}")
         log_message("HeartbeatThread instance created")
 
     def run(self):
@@ -64,9 +86,9 @@ class HeartbeatThread(threading.Thread):
                 
                 # Setup exchange and queue
                 log_message(f"Creating exchange: {EXCHANGE_NAME} and queue: {QUEUE_NAME}")
-                channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type='fanout', durable=True)
+                channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type='direct', durable=True)  # Changed to direct
                 channel.queue_declare(queue=QUEUE_NAME, durable=True)
-                channel.queue_bind(exchange=EXCHANGE_NAME, queue=QUEUE_NAME)
+                channel.queue_bind(exchange=EXCHANGE_NAME, queue=QUEUE_NAME, routing_key=ROUTING_KEY)  # Added routing key
                 log_message("Exchange and queue setup complete")
                 
                 # Send heartbeat messages in a loop
@@ -74,18 +96,22 @@ class HeartbeatThread(threading.Thread):
                     current_time = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
                     heartbeat_msg = self.create_heartbeat_message()
                     
-                    log_message(f"Publishing heartbeat at {current_time}")
-                    channel.basic_publish(
-                        exchange=EXCHANGE_NAME,
-                        routing_key='heartbeat',
-                        body=heartbeat_msg,
-                        properties=pika.BasicProperties(
-                            delivery_mode=2,  # Persistent messages
-                            content_type='application/xml'
+                    # Validate the XML against XSD schema before sending
+                    if self.validate_xml(heartbeat_msg):
+                        log_message(f"Publishing heartbeat at {current_time}")
+                        channel.basic_publish(
+                            exchange=EXCHANGE_NAME,
+                            routing_key=ROUTING_KEY,  # Using specific routing key
+                            body=heartbeat_msg,
+                            properties=pika.BasicProperties(
+                                delivery_mode=2,  # Persistent messages
+                                content_type='application/xml'
+                            )
                         )
-                    )
-                    
-                    log_message(f"Heartbeat sent at {current_time}")
+                        log_message(f"Heartbeat sent at {current_time}")
+                    else:
+                        log_message(f"Heartbeat message validation failed, message not sent")
+                        
                     time.sleep(HEARTBEAT_INTERVAL)
                     
             except pika.exceptions.AMQPConnectionError as e:
@@ -112,43 +138,48 @@ class HeartbeatThread(threading.Thread):
         self.running = False
         
     def create_heartbeat_message(self):
-        """Generates a simple XML heartbeat message."""
+        """Generates a simplified XML heartbeat message according to the new XSD schema."""
         root = ET.Element("Heartbeat")
         
-        # Add ServiceName element
+        # Add ServiceName element - only field needed per new schema
         service_name = ET.SubElement(root, "ServiceName")
-        service_name.text = "Odoo_POS"  # Changed from Odoo_POS to Monitoring
-        
-        # Add Status element
-        status = ET.SubElement(root, "Status")
-        status.text = "OK"
-        
-        # Add Timestamp element
-        timestamp = ET.SubElement(root, "Timestamp")
-        timestamp.text = datetime.datetime.utcnow().isoformat() + "Z"
-        
-        # Add HeartBeatInterval element
-        heartbeat_interval = ET.SubElement(root, "HeartBeatInterval")
-        heartbeat_interval.text = "{HEARTBEAT_INTERVAL}"
-        
-        # Add Metadata element with nested elements
-        metadata = ET.SubElement(root, "Metadata")
-        
-        # Add Version element under Metadata
-        version = ET.SubElement(metadata, "Version")
-        version.text = "1.0.0"
-        
-        # Add Host element under Metadata
-        host = ET.SubElement(metadata, "Host")
-        host.text = "Azure_VM"
-        
-        # Add Environment element under Metadata
-        environment = ET.SubElement(metadata, "Environment")
-        environment.text = "production"
+        service_name.text = "Odoo_POS"
         
         # Convert to string and return
         xml_message = ET.tostring(root, encoding="utf-8", method="xml").decode()
         return xml_message
+    
+    def validate_xml(self, xml_string):
+        """Validate XML string against the XSD schema."""
+        if not hasattr(self, 'xsd_schema') or self.xsd_schema is None:
+            try:
+                # Recreate the schema on first use
+                xsd_no_declaration = HEARTBEAT_XSD.replace('<?xml version="1.0" encoding="UTF-8"?>', '')
+                xsd_doc = etree.XML(xsd_no_declaration.encode('utf-8'))
+                self.xsd_schema = etree.XMLSchema(xsd_doc)
+                log_message("XSD schema for heartbeat validation loaded on first use")
+            except Exception as e:
+                log_message(f"Failed to load XSD schema: {e}")
+                return True  # Continue without validation rather than failing
+        
+        try:
+            # Remove XML declaration from message before validation
+            xml_content = xml_string.replace('<?xml version="1.0" encoding="UTF-8"?>', '')
+            if xml_content.startswith('\n'):
+                xml_content = xml_content.strip()
+            
+            xml_doc = etree.XML(xml_content.encode('utf-8'))
+            is_valid = self.xsd_schema.validate(xml_doc)
+            
+            if not is_valid:
+                for error in self.xsd_schema.error_log:
+                    log_message(f"XML validation error: {error}")
+                return False
+                
+            return True
+        except Exception as e:
+            log_message(f"Error during XML validation: {type(e).__name__} - {str(e)}")
+            return False
 
 
 class RabbitMQHeartbeat(models.AbstractModel):
