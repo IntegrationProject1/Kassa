@@ -1,0 +1,7 @@
+<odoo>
+    <template id="assets_backend" inherit_id="point_of_sale.assets">
+        <xpath expr="." position="inside">
+            <script type="text/javascript" src="/customer_QR_scanner/static/src/js/customer_barcode_handler.js"/>
+        </xpath>
+    </template>
+</odoo>
