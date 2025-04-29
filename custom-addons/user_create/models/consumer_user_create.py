@@ -419,7 +419,29 @@ class RabbitMQCustomerCreateStartup(models.AbstractModel):
 class ResPartner(models.Model):
     _inherit = 'res.partner'
     
-    external_id = fields.Char(string="External ID", 
-                             help="External identifier for integration with other systems",
-                             index=True)
+    external_id = fields.Char(
+        string="External ID", 
+        help="External identifier for integration with other systems",
+        index=True
+    )
+    qrcode_number = fields.Char(
+        string="QR Code Number",
+        help="A unique 23F-digit number starting with 042 followed by the user's UID",
+        index=True,
+        readonly=True
+    )
+
+    @api.model
+    def create(self, vals):
+        """Override create method to generate QR code number and set it as the barcode."""
+        if 'qrcode_number' not in vals or not vals['qrcode_number']:
+            uuid = vals.get('external_id') ## use the UUID from the XML message
+            qrcode_number = f"042{uuid}"
+            vals['qrcode_number'] = qrcode_number
+        
+        # Set the qrcode_number as the barcode
+        if 'barcode' not in vals or not vals['barcode']:
+            vals['barcode'] = vals['qrcode_number']
+        
+        return super(ResPartner, self).create(vals)
 
