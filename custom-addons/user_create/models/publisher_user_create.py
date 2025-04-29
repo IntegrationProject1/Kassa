@@ -29,8 +29,9 @@ USER_CREATE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
         <xs:complexType>
             <xs:sequence>
                 <xs:element name="ActionType" type="xs:string"/>
-                <xs:element name="UserID" type="xs:string"/>
+                <xs:element name="UUID" type="xs:dateTime"/>
                 <xs:element name="TimeOfAction" type="xs:dateTime"/>
+                <xs:element name="EncryptedPassword" type="xs:string"/>
                 <xs:element name="FirstName" type="xs:string" minOccurs="0"/>
                 <xs:element name="LastName" type="xs:string" minOccurs="0"/>
                 <xs:element name="PhoneNumber" type="xs:string" minOccurs="0"/>
@@ -53,13 +54,28 @@ USER_CREATE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
 
 def log_message(message):
     """Standard logging function"""
-    print(f"[USER_CREATE_MODULE] {message}")
+    print(f"[CUSTOMER_CREATE_MODULE] {message}")
     _logger.info(message)
 
-log_message("RabbitMQ User Create Publisher loaded")
+log_message("RabbitMQ Customer Create Publisher loaded")
+
+# Create a shared prevention registry to avoid circular imports
+class PreventionRegistry:
+    """Static registry to track recently created partner IDs"""
+    recently_created_partners = set()
+
+# Create global instance
+prevention_registry = PreventionRegistry()
 
 class ResPartner(models.Model):
     _inherit = 'res.partner'
+    
+    # Track recently created partner IDs to prevent duplicate notifications
+    _recently_created_ids = set()
+    
+    external_id = fields.Char(string="External ID", 
+                            help="External identifier for integration with other systems",
+                            index=True)
     
     def _get_rabbitmq_connection_params(self):
         """Get RabbitMQ connection parameters from environment variables"""
@@ -86,25 +102,27 @@ class ResPartner(models.Model):
             log_message(f"XML validation error: {e}")
             return False
     
-    def create_user_create_message(self, partner_data):
-        """Create XML message for user creation with support for nested elements"""
-        # Create the root element
-        root = ET.Element("UserMessage")
+    def create_customer_create_message(self, partner_data):
+        """Create XML message for customer creation"""
+        root = ET.Element("UserMessage")  # Keep as UserMessage per XSD schema
         
-        # Add regular elements, including empty fields
-        for key in ['ActionType', 'UserID', 'TimeOfAction', 'FirstName', 'LastName', 'PhoneNumber', 'EmailAddress']:
-            child = ET.SubElement(root, key)
-            child.text = str(partner_data.get(key, ''))  # Set to empty string if key is not present
+        # Add regular elements
+        for key, value in partner_data.items():
+            if key == 'Business':
+                continue  # Handle business separately
+            if value is not None:
+                child = ET.SubElement(root, key)
+                child.text = str(value)
         
         # Add business element if present
-        business_element = ET.SubElement(root, "Business")
-        
-        # Define business fields
-        business_fields = ['BusinessName', 'BusinessEmail', 'RealAddress', 'BTWNumber', 'FacturationAddress']
-        
-        for bus_key in business_fields:
-            bus_child = ET.SubElement(business_element, bus_key)
-            bus_child.text = str(partner_data.get('Business', {}).get(bus_key, ''))  # Set to empty string if key is not present
+        if 'Business' in partner_data and partner_data['Business']:
+            business_element = ET.SubElement(root, "Business")
+            business_data = partner_data['Business']
+            
+            for bus_key, bus_value in business_data.items():
+                if bus_value is not None and bus_value != '':
+                    bus_child = ET.SubElement(business_element, bus_key)
+                    bus_child.text = str(bus_value)
         
         # Convert to XML string
         xml_string = ET.tostring(root, encoding='utf-8', method='xml').decode('utf-8')
@@ -115,31 +133,23 @@ class ResPartner(models.Model):
             log_message("Generated XML does not conform to XSD schema")
             
         return xml_string
-
-
     
-    def publish_user_create(self, partner_data):
-        """Publish user create message to other service queues"""
+    def publish_customer_create(self, partner_data):
+        """Publish customer create message to other service queues"""
         try:
-            user_id = partner_data.get('UserID')
-            log_message(f"Publishing user create message for user_id: {user_id}")
+            customer_id = partner_data.get('UUID')  # Changed from UserID to UUID
+            log_message(f"Publishing customer create message for customer_id: {customer_id}")
             
             # Create the message
-            message = self.create_user_create_message(partner_data)
-            log_message(f"Message created successfully: {message}")
+            message = self.create_customer_create_message(partner_data)
+            log_message(f"Sending XML message: \n{message}")
             
             # Connect to RabbitMQ
-            log_message(f"Connecting to RabbitMQ at {RABBITMQ_HOST}:{RABBITMQ_PORT}...")
             connection = pika.BlockingConnection(self._get_rabbitmq_connection_params())
-            log_message("RabbitMQ connection established")
-            
             channel = connection.channel()
-            log_message("RabbitMQ channel created")
             
             # Ensure the exchange exists
-            log_message(f"Declaring exchange '{EXCHANGE_NAME}'...")
             channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type='topic', durable=True)
-            log_message(f"Exchange '{EXCHANGE_NAME}' declared")
             
             # Publish to each target queue
             success_count = 0
@@ -149,17 +159,12 @@ class ResPartner(models.Model):
                 
                 try:
                     # Ensure the queue exists
-                    log_message(f"Declaring queue '{queue_name}'...")
                     channel.queue_declare(queue=queue_name, durable=True)
-                    log_message(f"Queue '{queue_name}' declared")
                     
                     # Bind queue to exchange
-                    log_message(f"Binding queue '{queue_name}' to exchange '{EXCHANGE_NAME}' with routing key '{routing_key}'...")
                     channel.queue_bind(exchange=EXCHANGE_NAME, queue=queue_name, routing_key=routing_key)
-                    log_message(f"Queue binding created")
                     
                     # Publish message
-                    log_message(f"Publishing message to exchange '{EXCHANGE_NAME}' with routing key '{routing_key}'...")
                     channel.basic_publish(
                         exchange=EXCHANGE_NAME,
                         routing_key=routing_key,
@@ -175,58 +180,72 @@ class ResPartner(models.Model):
                 except Exception as queue_error:
                     log_message(f"Error publishing to queue '{queue_name}': {queue_error}")
             
-            log_message("Closing RabbitMQ connection...")
             connection.close()
-            log_message(f"RabbitMQ connection closed. Successfully sent create message to {success_count} of {len(TARGET_QUEUES)} queues.")
             return success_count > 0
             
-        except pika.exceptions.AMQPConnectionError as e:
-            error_msg = f"RabbitMQ connection error: {e}"
-            log_message(error_msg)
-            return False
         except Exception as e:
-            error_msg = f"Failed to publish user create message: {e}"
-            log_message(error_msg)
+            log_message(f"Failed to publish customer create message: {e}")
             return False
     
     @api.model
     def create(self, vals):
-        """Override the create method to send user data to RabbitMQ."""
+        """Override the create method to send customer data to RabbitMQ."""
         log_message("Creating a new partner...")
         
-        # Create the partner
-        partner = super(ResPartner, self).create(vals)
+        # Generate timestamp with microsecond precision for external_id if this is a customer
+        if vals.get('customer_rank', 0) > 0 and not vals.get('external_id'):
+            # Use timestamp format for external_id
+            timestamp_id = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            vals['external_id'] = timestamp_id
+            log_message(f"Generated new timestamp-based external_id: {timestamp_id}")
         
-        # Add partner ID to the recently created set
-        # Import the set from the update module
-        from odoo.addons.user_update.models.publisher_user_update import ResPartner as UpdateResPartner
-        UpdateResPartner._recently_created_partners.add(partner.id)
+        # Set context flags for write operations to prevent duplicate messages
+        ctx = dict(self.env.context, creating_new_partner=True, skip_rabbitmq_publish=True)
         
-        log_message(f"Added partner ID {partner.id} to recently created set")
+        # Create the partner with our special context
+        partner = super(ResPartner, self.with_context(ctx)).create(vals)
         
-        # Schedule cleanup of the recently created set after 5 seconds
-        self.env.cr.execute("""
-            SELECT pg_sleep(5);
-            SELECT 1;
-        """)
+        # Check if we should skip publishing (when created from RabbitMQ or not a customer)
+        if self.env.context.get('skip_rabbitmq_publish'):
+            log_message(f"Skipping RabbitMQ publish for partner {partner.id} (context flag)")
+            return partner
         
-        def cleanup_partner_id():
-            try:
-                UpdateResPartner._recently_created_partners.discard(partner.id)
-                log_message(f"Removed partner ID {partner.id} from recently created set")
-            except Exception as e:
-                log_message(f"Error cleaning up partner ID: {e}")
+        # CRITICAL: Only send messages for actual customers
+        if not partner.customer_rank > 0:
+            log_message(f"Partner {partner.id} is not a customer (customer_rank={partner.customer_rank}), skipping message")
+            return partner
         
-        # Use a thread for cleanup (this ensures we don't block the main thread)
+        # Add to both prevention registries
+        self._recently_created_ids.add(partner.id)
+        prevention_registry.recently_created_partners.add(partner.id)
+        log_message(f"Added customer ID {partner.id} to prevention registry")
+        
+        # Use threading instead of pg_sleep which can block database
         import threading
-        threading.Timer(5, cleanup_partner_id).start()
+        def cleanup_ids():
+            try:
+                # Clean up both sets
+                if partner.id in self._recently_created_ids:
+                    self._recently_created_ids.discard(partner.id)
+                if partner.id in prevention_registry.recently_created_partners:
+                    prevention_registry.recently_created_partners.discard(partner.id)
+                log_message(f"Removed customer ID {partner.id} from prevention registry")
+            except Exception as e:
+                log_message(f"Error in cleanup: {e}")
+        
+        # Schedule cleanup after 30 seconds (increased from 10)
+        threading.Timer(30.0, cleanup_ids).start()
         
         try:
-            # Prepare partner data
+            # Generate timestamp with microsecond precision
+            uuid_timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            
+            # Prepare customer data
             partner_data = {
                 'ActionType': 'CREATE',
-                'UserID': str(partner.id),
-                'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                'UUID': partner.external_id or uuid_timestamp,  # Use existing external_id if available
+                'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                'EncryptedPassword': 'odooadmin',
                 'FirstName': partner.name.split(' ')[0] if partner.name else '',
                 'LastName': ' '.join(partner.name.split(' ')[1:]) if partner.name and ' ' in partner.name else '',
                 'PhoneNumber': partner.phone or '',
@@ -240,7 +259,7 @@ class ResPartner(models.Model):
                     'BusinessName': business_name or '',
                     'BusinessEmail': partner.email or '',
                     'RealAddress': f"{partner.street or ''}, {partner.city or ''}, {partner.zip or ''}" if any([partner.street, partner.city, partner.zip]) else '',
-                    'BTWNumber': partner.vat or vals.get('vat', ''),
+                    'BTWNumber': partner.vat or '',
                     'FacturationAddress': f"{partner.street2 or ''}, {partner.city or ''}, {partner.zip or ''}" if any([partner.street2, partner.city, partner.zip]) else '',
                 }
                 
@@ -248,12 +267,36 @@ class ResPartner(models.Model):
                 if any(business_data.values()):
                     partner_data['Business'] = business_data
 
-            log_message(f"Partner data prepared: {partner_data}")
-            
             # Send the RabbitMQ message
-            self.publish_user_create(partner_data)
+            self.publish_customer_create(partner_data)
+            log_message(f"Published CREATE message for customer {partner.id}")
             
         except Exception as e:
-            log_message(f"Error preparing or sending user create message: {e}")
+            log_message(f"Error preparing or sending customer create message: {e}")
         
         return partner
+    
+    def write(self, vals):
+        """Override the write method to send customer data updates to RabbitMQ"""
+        # If customer_rank is being set to > 0 and there's no external_id, generate one
+        if vals.get('customer_rank', 0) > 0:
+            for record in self.filtered(lambda r: not r.external_id):
+                # Find the highest existing external_id that is numeric
+                last_id = 0
+                partners_with_ext_id = self.search([('external_id', '!=', False)])
+                for partner in partners_with_ext_id:
+                    try:
+                        ext_id_num = int(partner.external_id)
+                        if ext_id_num > last_id:
+                            last_id = ext_id_num
+                    except (ValueError, TypeError):
+                        pass  # Skip non-numeric external_ids
+                
+                # Set the next external_id
+                if 'external_id' not in vals:
+                    vals['external_id'] = str(last_id + 1)
+                    log_message(f"Generated new external_id on update: {vals['external_id']}")
+
+        result = super(ResPartner, self).write(vals)
+        # Rest of your existing write method code...
+        return result
