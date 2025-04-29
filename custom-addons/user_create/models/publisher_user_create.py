@@ -2,6 +2,7 @@ import pika
 import os
 import logging
 import xml.etree.ElementTree as ET
+import random
 from datetime import datetime
 from odoo import models, api, fields
 from lxml import etree
@@ -199,6 +200,19 @@ class ResPartner(models.Model):
             vals['external_id'] = timestamp_id
             log_message(f"Generated new timestamp-based external_id: {timestamp_id}")
         
+        # Assign external_id if not already provided
+        external_id = vals.get('external_id')
+
+        # Generate the barcode using external_id with '042' prefix
+        barcode = f"042{external_id.replace('-', '')}"
+
+        # Check if the barcode is already in use
+        if self.env['res.partner'].search_count([('barcode', '=', barcode)]):
+            _logger.warning(f"Barcode {barcode} already exists for another partner.")
+        else:
+            vals['barcode'] = barcode
+            _logger.info(f"Generated unique barcode for customer: {barcode}")
+
         # Set context flags for write operations to prevent duplicate messages
         ctx = dict(self.env.context, creating_new_partner=True, skip_rabbitmq_publish=True)
         
