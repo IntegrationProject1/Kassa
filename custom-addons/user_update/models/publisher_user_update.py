@@ -14,10 +14,13 @@ RABBITMQ_PORT = int(os.environ.get('RABBITMQ_PORT'))
 RABBITMQ_USER = os.environ.get('RABBITMQ_USER')
 RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
 
-# Exchange and queue names
+# Exchange and target queues definition
 EXCHANGE_NAME = 'user'
-QUEUE_NAME = 'kassa_user_update'
-ROUTING_KEY = 'kassa.user.update'
+TARGET_QUEUES = [
+    {'queue': 'crm_user_update', 'routing_key': 'crm.user.update'},
+    {'queue': 'facturatie_user_update', 'routing_key': 'facturatie.user.update'},
+    {'queue': 'frontend_user_update', 'routing_key': 'frontend.user.update'}
+]
 
 # XSD Schema for validation
 USER_UPDATE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -26,9 +29,9 @@ USER_UPDATE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
         <xs:complexType>
             <xs:sequence>
                 <xs:element name="ActionType" type="xs:string"/>
-                <xs:element name="UserID" type="xs:string"/>
+                <xs:element name="UUID" type="xs:dateTime"/>
                 <xs:element name="TimeOfAction" type="xs:dateTime"/>
-                <xs:element name="Password" type="xs:string" minOccurs="0"/>
+                <xs:element name="EncryptedPassword" type="xs:string" minOccurs="0"/>
                 <xs:element name="FirstName" type="xs:string" minOccurs="0"/>
                 <xs:element name="LastName" type="xs:string" minOccurs="0"/>
                 <xs:element name="PhoneNumber" type="xs:string" minOccurs="0"/>
@@ -51,15 +54,23 @@ USER_UPDATE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
 
 def log_message(message):
     """Standard logging function"""
-    print(f"[USER_UPDATE_MODULE] {message}")
+    print(f"[CUSTOMER_UPDATE_MODULE] {message}")
     _logger.info(message)
 
-log_message("RabbitMQ User Update Publisher loaded")
+log_message("RabbitMQ Customer Update Publisher loaded")
+
+# Import prevention registry to avoid circular imports
+try:
+    from odoo.addons.user_create.models.publisher_user_create import prevention_registry
+    log_message("Successfully imported prevention registry")
+except ImportError:
+    log_message("Could not import prevention registry, creating local instance")
+    class PreventionRegistry:
+        recently_created_partners = set()
+    prevention_registry = PreventionRegistry()
 
 class ResPartner(models.Model):
     _inherit = 'res.partner'
-    
-    _recently_created_partners = set()  # Track recently created partner IDs
     
     def _get_rabbitmq_connection_params(self):
         """Get RabbitMQ connection parameters from environment variables"""
@@ -86,9 +97,8 @@ class ResPartner(models.Model):
             log_message(f"XML validation error: {e}")
             return False
     
-    def create_user_update_message(self, partner_data):
-        """Create XML message for user update with support for nested elements"""
-        # Create the root element
+    def create_customer_update_message(self, partner_data):
+        """Create XML message for customer update"""
         root = ET.Element("UserMessage")
         
         # Add regular elements
@@ -119,100 +129,119 @@ class ResPartner(models.Model):
             
         return xml_string
     
-    def publish_user_update(self, partner_data):
-        """Publish user update message to RabbitMQ"""
+    def publish_customer_update(self, partner_data):
+        """Publish customer update message to other service queues"""
         try:
-            user_id = partner_data.get('UserID')
-            log_message(f"Publishing user update message for user_id: {user_id}")
+            customer_id = partner_data.get('UUID')  # Changed from UserID to UUID
+            log_message(f"Publishing customer update message for customer_id: {customer_id}")
             
             # Create the message
-            message = self.create_user_update_message(partner_data)
-            log_message(f"Message created successfully: {message}")
+            message = self.create_customer_update_message(partner_data)
             
             # Connect to RabbitMQ
-            log_message(f"Connecting to RabbitMQ at {RABBITMQ_HOST}:{RABBITMQ_PORT}...")
             connection = pika.BlockingConnection(self._get_rabbitmq_connection_params())
-            log_message("RabbitMQ connection established")
-            
             channel = connection.channel()
-            log_message("RabbitMQ channel created")
             
             # Ensure the exchange exists
-            log_message(f"Declaring exchange '{EXCHANGE_NAME}'...")
             channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type='topic', durable=True)
-            log_message(f"Exchange '{EXCHANGE_NAME}' declared")
             
-            # Ensure the queue exists
-            log_message(f"Declaring queue '{QUEUE_NAME}'...")
-            channel.queue_declare(queue=QUEUE_NAME, durable=True)
-            log_message(f"Queue '{QUEUE_NAME}' declared")
+            # Publish to each target queue
+            success_count = 0
+            for target in TARGET_QUEUES:
+                queue_name = target['queue']
+                routing_key = target['routing_key']
+                
+                try:
+                    # Ensure the queue exists
+                    channel.queue_declare(queue=queue_name, durable=True)
+                    
+                    # Bind queue to exchange
+                    channel.queue_bind(exchange=EXCHANGE_NAME, queue=queue_name, routing_key=routing_key)
+                    
+                    # Publish message
+                    channel.basic_publish(
+                        exchange=EXCHANGE_NAME,
+                        routing_key=routing_key,
+                        body=message,
+                        properties=pika.BasicProperties(
+                            delivery_mode=2,  # Make message persistent
+                            content_type='application/xml'
+                        )
+                    )
+                    log_message(f"Message published to queue: {queue_name}")
+                    success_count += 1
+                    
+                except Exception as queue_error:
+                    log_message(f"Error publishing to queue '{queue_name}': {queue_error}")
             
-            # Bind queue to exchange
-            log_message(f"Binding queue '{QUEUE_NAME}' to exchange '{EXCHANGE_NAME}' with routing key '{ROUTING_KEY}'...")
-            channel.queue_bind(exchange=EXCHANGE_NAME, queue=QUEUE_NAME, routing_key=ROUTING_KEY)
-            log_message(f"Queue binding created")
-            
-            # Publish message
-            log_message(f"Publishing message to exchange '{EXCHANGE_NAME}' with routing key '{ROUTING_KEY}'...")
-            channel.basic_publish(
-                exchange=EXCHANGE_NAME,
-                routing_key=ROUTING_KEY,
-                body=message,
-                properties=pika.BasicProperties(
-                    delivery_mode=2,  # Make message persistent
-                    content_type='application/xml'
-                )
-            )
-            log_message(f"Message published to exchange: {EXCHANGE_NAME} with routing key: {ROUTING_KEY}")
-            
-            log_message("Closing RabbitMQ connection...")
             connection.close()
-            log_message(f"RabbitMQ connection closed. Successfully sent update message to {QUEUE_NAME}.")
-            return True
+            return success_count > 0
             
-        except pika.exceptions.AMQPConnectionError as e:
-            error_msg = f"RabbitMQ connection error: {e}"
-            log_message(error_msg)
-            return False
         except Exception as e:
-            error_msg = f"Failed to publish user update message: {e}"
-            log_message(error_msg)
+            log_message(f"Failed to publish customer update message: {e}")
             return False
     
     def write(self, vals):
         """Override the write method to send a RabbitMQ message on update."""
-        log_message(f"Updating a partner: {self.ids}")
+        log_message(f"Updating partner(s): {self.ids}")
         
-        # Check if this write should be skipped based on context
+        # Skip if we're in the process of creating a partner
+        if self.env.context.get('creating_new_partner'):
+            log_message("Skipping update during partner creation")
+            return super(ResPartner, self).write(vals)
+        
+        # Skip if explicitly requested in context
         if self.env.context.get('skip_rabbitmq_message'):
             log_message("Skipping RabbitMQ message due to context flag")
             return super(ResPartner, self).write(vals)
         
-        # Check if any of these partners were recently created (using class variable)
+        # If this is a customer and we're adding customer_rank but there's no external_id, generate one
+        if vals.get('customer_rank', 0) > 0:
+            for record in self.filtered(lambda r: not r.external_id):
+                # Generate timestamp with microsecond precision for external_id
+                timestamp_id = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                
+                # Set the timestamp as external_id
+                if 'external_id' not in vals:
+                    vals['external_id'] = timestamp_id
+                    log_message(f"Generated new timestamp-based external_id on update: {vals['external_id']}")
+        
+        # Check if any of these partners were recently created
         partners_to_skip = []
         partners_to_process = []
         
         for partner in self:
-            if partner.id in self._recently_created_partners:
-                log_message(f"Skipping update message for recently created partner: {partner.id}")
+            # Skip if not a customer
+            if not partner.customer_rank > 0:
                 partners_to_skip.append(partner.id)
-            else:
-                partners_to_process.append(partner.id)
+                continue
+                
+            # Check both prevention registries
+            if partner.id in prevention_registry.recently_created_partners:
+                log_message(f"Partner {partner.id} was recently created (registry), skipping update")
+                partners_to_skip.append(partner.id)
+                continue
+                
+            # Process this partner
+            partners_to_process.append(partner.id)
         
         # Call the original write method
         result = super(ResPartner, self).write(vals)
         
-        # Only process partners that weren't recently created
+        # Only process partners that weren't recently created and are customers
         if partners_to_process:
-            log_message(f"Processing update for partners: {partners_to_process}")
             partners_to_update = self.env['res.partner'].browse(partners_to_process)
             
             for partner in partners_to_update:
-                # Basic user data
+                # Generate timestamp with microsecond precision
+                uuid_timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                
+                # Basic customer data
                 partner_data = {
                     'ActionType': 'UPDATE',
-                    'UserID': str(partner.id),
-                    'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    'UUID': uuid_timestamp,  # Using timestamp with microsecond precision
+                    'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),  # Also using microsecond precision
+                    'EncryptedPassword': 'odooadmin',  # Standard password as requested
                     'FirstName': partner.name.split(' ')[0] if partner.name else '',
                     'LastName': ' '.join(partner.name.split(' ')[1:]) if partner.name and ' ' in partner.name else '',
                     'PhoneNumber': partner.phone or '',
@@ -220,23 +249,29 @@ class ResPartner(models.Model):
                 }
                 
                 # Add business data
-                if partner.is_company or partner.parent_id:
-                    business_name = partner.name if partner.is_company else partner.parent_id.name
+                if partner.is_company or partner.parent_id or partner.company_name:
+                    # Determine business name
+                    business_name = ''
+                    if partner.is_company:
+                        business_name = partner.name
+                    elif partner.parent_id:
+                        business_name = partner.parent_id.name
+                    elif partner.company_name:
+                        business_name = partner.company_name
+                        
                     business_data = {
                         'BusinessName': business_name or '',
                         'BusinessEmail': partner.email or '',
                         'RealAddress': f"{partner.street or ''}, {partner.city or ''}, {partner.zip or ''}" if any([partner.street, partner.city, partner.zip]) else '',
-                        'BTWNumber': partner.vat or '',  # VAT number in Odoo
-                        'FacturationAddress': f"{partner.street or ''}, {partner.city or ''}, {partner.zip or ''}" if any([partner.street, partner.city, partner.zip]) else '',
+                        'BTWNumber': partner.vat or '',
+                        'FacturationAddress': f"{partner.street2 or ''}, {partner.city or ''}, {partner.zip or ''}" if any([partner.street2, partner.city, partner.zip]) else '',
                     }
                     
                     # Only add Business section if there's actual data
                     if any(business_data.values()):
                         partner_data['Business'] = business_data
 
-                log_message(f"Partner data prepared: {partner_data}")
-
                 # Send the RabbitMQ message
-                self.publish_user_update(partner_data)
+                self.publish_customer_update(partner_data)
 
         return result

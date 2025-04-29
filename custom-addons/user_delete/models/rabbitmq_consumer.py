@@ -21,10 +21,11 @@ RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
 
 # Definieer welke queues we willen consumeren
 SERVICE_QUEUES = [
-    'crm_user_delete',
-    'facturatie_user_delete',
-    'frontend_user_delete'
-    # kassa_user_delete is bewust uitgesloten
+    'kassa_user_delete'
+    # De andere queues worden nu niet meer beluisterd
+    # 'crm_user_delete',
+    # 'facturatie_user_delete',
+    # 'frontend_user_delete'
 ]
 
 # Add XSD schema as a constant
@@ -34,7 +35,7 @@ XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
         <xs:complexType>
             <xs:sequence>
                 <xs:element name="ActionType" type="xs:string"/>
-                <xs:element name="UserID" type="xs:string"/>
+                <xs:element name="UUID" type="xs:dateTime"/>
                 <xs:element name="TimeOfAction" type="xs:dateTime"/>
             </xs:sequence>
         </xs:complexType>
@@ -211,7 +212,7 @@ class UserDeleteThread(threading.Thread):
                     
                     # Check message format
                     action_type = root.find('ActionType')
-                    user_id = root.find('UserID')
+                    uuid_elem = root.find('UUID')  # Changed from UserID to UUID
                     time_of_action = root.find('TimeOfAction')
                     
                     # Debug logging with element existence check
@@ -221,10 +222,10 @@ class UserDeleteThread(threading.Thread):
                         log_message("ActionType element not found")
                         return False
                         
-                    if user_id is not None:
-                        log_message(f"Found UserID: '{user_id.text}'")
+                    if uuid_elem is not None:
+                        log_message(f"Found UUID: '{uuid_elem.text}'")
                     else:
-                        log_message("UserID element not found")
+                        log_message("UUID element not found")
                         return False
                     
                     if time_of_action is not None:
@@ -237,8 +238,8 @@ class UserDeleteThread(threading.Thread):
                     if not action_type.text or action_type.text.strip() == '':
                         log_message("ActionType element has no text")
                         return False
-                    if not user_id.text or user_id.text.strip() == '':
-                        log_message("UserID element has no text")
+                    if not uuid_elem.text or uuid_elem.text.strip() == '':
+                        log_message("UUID element has no text")
                         return False
                     if not time_of_action.text or time_of_action.text.strip() == '':
                         log_message("TimeOfAction element has no text")
@@ -249,61 +250,48 @@ class UserDeleteThread(threading.Thread):
                         log_message(f"Not a DELETE action: '{action_type.text}'")
                         return False
                     
-                    user_id_value = user_id.text.strip()
-                    log_message(f"Processing delete request for user ID: {user_id_value}")
+                    # Use UUID as timestamp string
+                    uuid_value = uuid_elem.text.strip()
+                    log_message(f"Processing delete request for UUID timestamp: {uuid_value}")
                     
-                    # Find the user - search for numeric ID or login (email)
-                    # Convert to integer if it's a number
-                    try:
-                        numeric_id = int(user_id_value)
-                        log_message(f"Converted user ID to numeric: {numeric_id}")
-                    except (ValueError, TypeError):
-                        numeric_id = -1
-                        log_message(f"User ID is not numeric, using -1 for numeric search")
-                        
-                    log_message(f"Searching for user with ID {numeric_id} or login {user_id_value}")
-                    
-                    # Diagnostic - verify users exist in database
-                    all_users = env['res.users'].sudo().search_read([('id', '>', 0)], ['id', 'name', 'login'])
-                    log_message(f"Found {len(all_users)} users in database. First few: {all_users[:10]}")
-                    
-                    user = env['res.users'].sudo().search([
-                        '|', 
-                        ('id', '=', numeric_id),
-                        ('login', '=', user_id_value)
+                    # Search by external_id (highest priority)
+                    customer = env['res.partner'].sudo().search([
+                        ('external_id', '=', uuid_value)
                     ], limit=1)
                     
-                    if not user:
-                        log_message(f"User not found for ID/login: {user_id_value}")
+                    if customer:
+                        log_message(f"Found customer by external_id={uuid_value}: ID={customer.id}, Name={customer.name}")
+                    else:
+                        log_message(f"No customer found with external_id or database ID={uuid_value}")
                         return False
                     
                     # Don't delete admin users
-                    if user.id <= 2:  # Also protect admin (2)
-                        log_message(f"Cannot delete system user with ID: {user.id}")
+                    if customer.id <= 2:  # Also protect admin (2)
+                        log_message(f"Cannot delete system user with ID: {customer.id}")
                         return False
                     
-                    # Store user info before deletion
-                    user_name = user.name
-                    user_id = user.id
-                    user_login = user.login
+                    # Store customer info before deletion
+                    customer_name = customer.name
+                    customer_id = customer.id
+                    customer_email = customer.email
                     
-                    # Log the user deletion
-                    log_message(f"Deleting user: {user_name} (ID: {user_id}, Login: {user_login})")
+                    # Log the customer deletion
+                    log_message(f"Deleting customer: {customer_name} (ID: {customer_id}, Email: {customer_email})")
                     
                     try:
-                        # First archive the user
-                        user.write({'active': False})
-                        log_message(f"User {user_name} archived successfully")
+                        # First archive the customer
+                        customer.write({'active': False})
+                        log_message(f"Customer {customer_name} archived successfully")
                         
                         # Then try to delete
-                        user.unlink()
-                        log_message(f"User with ID {user_id} deleted successfully")
+                        customer.unlink()
+                        log_message(f"Customer with ID {customer_id} deleted successfully")
                         
                         new_cr.commit()
                         log_message("Database transaction committed")
                         return True
                     except Exception as delete_error:
-                        log_message(f"Error during user deletion: {str(delete_error)}")
+                        log_message(f"Error during customer deletion: {str(delete_error)}")
                         log_message(traceback.format_exc())
                         new_cr.rollback()
                         log_message("Rolling back transaction")
@@ -311,7 +299,7 @@ class UserDeleteThread(threading.Thread):
                         
                 except Exception as e:
                     new_cr.rollback()
-                    log_message(f"Error processing user deletion: {str(e)}")
+                    log_message(f"Error processing customer deletion: {str(e)}")
                     log_message(traceback.format_exc())
                     return False
         except Exception as e:
