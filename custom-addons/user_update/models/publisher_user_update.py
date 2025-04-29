@@ -233,14 +233,19 @@ class ResPartner(models.Model):
             partners_to_update = self.env['res.partner'].browse(partners_to_process)
             
             for partner in partners_to_update:
-                # Generate timestamp with microsecond precision
-                uuid_timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                # Use existing external_id instead of generating a new timestamp
+                partner_uuid = partner.external_id
+                
+                # If external_id is not set, fallback to a timestamp
+                if not partner_uuid:
+                    partner_uuid = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                    log_message(f"Warning: No external_id found for partner {partner.id}, using timestamp instead")
                 
                 # Basic customer data
                 partner_data = {
                     'ActionType': 'UPDATE',
-                    'UUID': uuid_timestamp,  # Using timestamp with microsecond precision
-                    'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),  # Also using microsecond precision
+                    'UUID': partner_uuid,  # Using existing external_id
+                    'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),  # Keeping microsecond precision for action time
                     'EncryptedPassword': 'odooadmin',  # Standard password as requested
                     'FirstName': partner.name.split(' ')[0] if partner.name else '',
                     'LastName': ' '.join(partner.name.split(' ')[1:]) if partner.name and ' ' in partner.name else '',
