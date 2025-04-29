@@ -23,10 +23,58 @@ jobs:
       - name: Build Docker Image
         run: docker compose --env-file /home/ehbstudent/.env build
 
-      - name: Test Docker Compose
+      - name: Run Tests
         run: |
-          docker compose --env-file /home/ehbstudent/.env up -d
-          sleep 10
-          docker ps
-          docker inspect --format='{{json .State.Health}}' $(docker ps -q) | jq
+          # Start the database container first
+          docker compose --env-file /home/ehbstudent/.env up -d db
+          
+          # Wait for PostgreSQL to be ready
+          echo "Waiting for PostgreSQL to be ready..."
+          for i in {1..30}; do
+            if docker exec $(docker compose ps -q db) pg_isready -h localhost -U "$POSTGRES_USER" -d "$POSTGRES_DB"; then
+              echo "PostgreSQL is ready!"
+              break
+            fi
+            echo "Waiting for PostgreSQL to start... ($i/30)"
+            sleep 3
+          done
+          
+          # Start Odoo container
+          docker compose --env-file /home/ehbstudent/.env up -d odoo
+          
+          # Wait for Odoo to be ready
+          echo "Waiting for Odoo to be ready..."
+          sleep 20
+          
+          # Get the Odoo container ID
+          ODOO_CONTAINER=$(docker compose ps -q odoo)
+          
+          # Source the .env file to get variables in the current shell
+          source /home/ehbstudent/.env
+          
+          echo "Running Odoo tests..."
+          # Create a test database and run the tests
+          docker exec $ODOO_CONTAINER python3 /usr/bin/odoo \
+            --db_host=db \
+            --db_user="$POSTGRES_USER" \
+            --db_password="$POSTGRES_PASSWORD" \
+            -d test_db_$GITHUB_RUN_ID \
+            --stop-after-init \
+            --test-enable \
+            --log-level=test \
+            --init=pos_kassa \
+            --addons-path=/mnt/extra-addons \
+            --http-port=8070
+          
+          # Store test exit code
+          TEST_EXIT_CODE=$?
+          
+          # Show container logs for debugging
+          echo "Odoo container logs:"
+          docker compose logs odoo
+          
+          # Cleanup 
           docker compose down
+          
+          # Exit with the test exit code
+          exit $TEST_EXIT_CODE

@@ -20,7 +20,7 @@ USER_MESSAGE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
         <xs:complexType>
             <xs:sequence>
                 <xs:element name="ActionType" type="xs:string"/>
-                <xs:element name="UserID" type="xs:string"/>
+                <xs:element name="UUID" type="xs:dateTime"/>
                 <xs:element name="TimeOfAction" type="xs:dateTime"/>
             </xs:sequence>
         </xs:complexType>
@@ -28,14 +28,14 @@ USER_MESSAGE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
 </xs:schema>'''
 
 def log_message(message):
-    print(f"[USER_DELETE_MODULE] {message}")
+    print(f"[CUSTOMER_DELETE_MODULE] {message}")
     _logger.info(message)
 
 log_message("RabbitMQ Publisher loaded")
 
 class RabbitMQPublisher(models.AbstractModel):
-    _name = 'user.delete.rabbitmq.publisher'
-    _description = 'RabbitMQ Publisher for User Deletion'
+    _name = 'customer.delete.rabbitmq.publisher'
+    _description = 'RabbitMQ Publisher for Customer Deletion'
 
     def _get_rabbitmq_connection_params(self):
         """Get RabbitMQ connection parameters from environment variables"""
@@ -62,8 +62,8 @@ class RabbitMQPublisher(models.AbstractModel):
             log_message(f"XML validation error: {e}")
             return False
     
-    def create_user_delete_message(self, user_id):
-        """Create XML message for user deletion"""
+    def create_customer_delete_message(self, customer_id, external_id=None):
+        """Create XML message for customer deletion"""
         # Create the root element
         root = ET.Element("UserMessage")
         
@@ -71,11 +71,23 @@ class RabbitMQPublisher(models.AbstractModel):
         action_type = ET.SubElement(root, "ActionType")
         action_type.text = "DELETE"
         
-        user_id_elem = ET.SubElement(root, "UserID")
-        user_id_elem.text = str(user_id)
+        # Use external_id directly if available, or generate new timestamp
+        uuid_value = None
+        if external_id:
+            # Check if external_id is already in timestamp format
+            if 'T' in external_id and '-' in external_id:
+                uuid_value = external_id
+        
+        # If no valid external_id, generate a new timestamp
+        if not uuid_value:
+            uuid_value = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            log_message(f"Generated new timestamp for UUID: {uuid_value}")
+        
+        uuid_elem = ET.SubElement(root, "UUID")
+        uuid_elem.text = uuid_value
         
         time_of_action = ET.SubElement(root, "TimeOfAction")
-        time_of_action.text = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        time_of_action.text = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")  # With microsecond precision
         
         # Convert to XML string
         xml_string = ET.tostring(root, encoding='utf-8', method='xml').decode('utf-8')
@@ -87,12 +99,15 @@ class RabbitMQPublisher(models.AbstractModel):
             
         return xml_string
     
-    def publish_user_delete(self, user_id):
-        """Publish user deletion message to all other service queues"""
+    def publish_customer_delete(self, customer_id, external_id=None):
+        """Publish customer deletion message to all other service queues"""
         try:
-            log_message(f"Publishing user deletion message for user_id: {user_id}")
+            # Use external_id directly if available
+            identifier = external_id if external_id else str(customer_id)
             
-            # Publish to all other service queues
+            log_message(f"Publishing customer deletion message for identifier: {identifier}")
+            
+            # Update target queues to be customer-focused
             target_queues = [
                 {'queue': 'crm_user_delete', 'routing_key': 'crm.user.delete'},
                 {'queue': 'facturatie_user_delete', 'routing_key': 'facturatie.user.delete'},
@@ -100,7 +115,7 @@ class RabbitMQPublisher(models.AbstractModel):
             ]
             
             # Create the message
-            message = self.create_user_delete_message(user_id)
+            message = self.create_customer_delete_message(customer_id, external_id)
             log_message("Message created successfully")
             
             # Connect to RabbitMQ
@@ -156,6 +171,35 @@ class RabbitMQPublisher(models.AbstractModel):
             log_message(error_msg)
             return False
         except Exception as e:
-            error_msg = f"Failed to publish user deletion message: {e}"
+            error_msg = f"Failed to publish customer deletion message: {e}"
             log_message(error_msg)
             return False
+        
+
+
+class ResPartner(models.Model):
+    _inherit = 'res.partner'
+    
+    def unlink(self):
+        """Override unlink to publish customer deletion events"""
+        # Store IDs and external IDs of customers to be deleted
+        customers_to_delete = []
+        
+        for partner in self:
+            if partner.customer_rank > 0:  # Only process actual customers
+                customers_to_delete.append({
+                    'id': partner.id,
+                    'external_id': partner.external_id
+                })
+                log_message(f"Will delete customer {partner.id} with external_id: {partner.external_id}")
+        
+        # Call the original unlink method
+        result = super(ResPartner, self).unlink()
+        
+        # Now publish the deletion messages
+        if customers_to_delete:
+            publisher = self.env['customer.delete.rabbitmq.publisher']
+            for customer in customers_to_delete:
+                publisher.publish_customer_delete(customer['id'], customer['external_id'])
+                
+        return result

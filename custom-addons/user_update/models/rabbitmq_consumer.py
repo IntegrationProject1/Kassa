@@ -29,7 +29,7 @@ SERVICE_QUEUES = [
 
 # Add this to make logs more visible
 def log_message(message):
-    print(f"[USER_UPDATE_MODULE] {message}")
+    print(f"[CUSTOMER_UPDATE_MODULE] {message}")
     _logger.info(message)
 
 # XSD Schema as a constant
@@ -39,9 +39,9 @@ XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
         <xs:complexType>
             <xs:sequence>
                 <xs:element name="ActionType" type="xs:string"/>
-                <xs:element name="UserID" type="xs:string"/>
+                <xs:element name="UUID" type="xs:dateTime"/>
                 <xs:element name="TimeOfAction" type="xs:dateTime"/>
-                <xs:element name="Password" type="xs:string" minOccurs="0"/>
+                <xs:element name="EncryptedPassword" type="xs:string" minOccurs="0"/>
                 <xs:element name="FirstName" type="xs:string" minOccurs="0"/>
                 <xs:element name="LastName" type="xs:string" minOccurs="0"/>
                 <xs:element name="PhoneNumber" type="xs:string" minOccurs="0"/>
@@ -62,8 +62,8 @@ XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
     </xs:element>
 </xs:schema>'''
 
-class UserUpdateThread(threading.Thread):
-    """Thread that listens for user update messages on RabbitMQ"""
+class CustomerUpdateThread(threading.Thread):
+    """Thread that listens for customer update messages on RabbitMQ"""
     
     def __init__(self, env):
         super().__init__()
@@ -75,7 +75,7 @@ class UserUpdateThread(threading.Thread):
     
     def run(self):
         """Listens to messages from the specified service queues"""
-        log_message(f"Starting UserUpdateThread connecting to {RABBITMQ_HOST}:{RABBITMQ_PORT}")
+        log_message(f"Starting CustomerUpdateThread connecting to {RABBITMQ_HOST}:{RABBITMQ_PORT}")
         log_message(f"Will consume from {len(SERVICE_QUEUES)} queues: {', '.join(SERVICE_QUEUES)}")
         
         while self.running:
@@ -173,10 +173,10 @@ class UserUpdateThread(threading.Thread):
                     except:
                         pass
         
-        log_message("UserUpdateThread stopped")
+        log_message("CustomerUpdateThread stopped")
     
     def _process_message(self, body, queue_name=None):
-        """Processes an XML message to update or create a user"""
+        """Processes an XML message to update or create a customer"""
         try:
             # Log where the message came from
             source_info = f" from queue {queue_name}" if queue_name else ""
@@ -217,27 +217,27 @@ class UserUpdateThread(threading.Thread):
                 env = api.Environment(new_cr, self.env.uid, self.env.context)
                 
                 try:
-                    # Parse the user data from the XML
-                    user_data = self._parse_user_data(xml_doc)
-                    if not user_data:
-                        log_message("Failed to parse user data from XML")
+                    # Parse the customer data from the XML
+                    customer_data = self._parse_customer_data(xml_doc)
+                    if not customer_data:
+                        log_message("Failed to parse customer data from XML")
                         return False
                     
-                    # Process the user data (create/update/delete)
-                    success = self._process_user_data(user_data, env)
+                    # Process the customer data (create/update/delete)
+                    success = self._process_customer_data(customer_data, env)
                     
                     if success:
                         new_cr.commit()
-                        log_message("User update successfully committed")
+                        log_message("Customer update successfully committed")
                         return True
                     else:
                         new_cr.rollback()
-                        log_message("User update failed, rolling back")
+                        log_message("Customer update failed, rolling back")
                         return False
                         
                 except Exception as e:
                     new_cr.rollback()
-                    log_message(f"Error processing user data: {str(e)}")
+                    log_message(f"Error processing customer data: {str(e)}")
                     log_message(traceback.format_exc())
                     return False
                 
@@ -246,31 +246,34 @@ class UserUpdateThread(threading.Thread):
             log_message(traceback.format_exc())
             return False
     
-    def _parse_user_data(self, xml_doc):
-        """Parse the XML and extract user data"""
+    def _parse_customer_data(self, xml_doc):
+        """Parse the XML and extract customer data"""
         try:
-            user_data = {}
+            customer_data = {}
             
-            # Extract basic user information
+            # Extract basic customer information (using same element names from XSD)
             action_type_elem = xml_doc.find('.//ActionType')
-            user_id_elem = xml_doc.find('.//UserID')
+            uuid_elem = xml_doc.find('.//UUID')  # Changed from UserID to UUID
             time_of_action_elem = xml_doc.find('.//TimeOfAction')
             
-            if action_type_elem is None or user_id_elem is None or time_of_action_elem is None:
+            if action_type_elem is None or uuid_elem is None or time_of_action_elem is None:
                 log_message("Required elements missing from XML")
                 return None
                 
-            user_data['action_type'] = action_type_elem.text
-            user_data['user_id'] = user_id_elem.text
-            user_data['time_of_action'] = time_of_action_elem.text
+            customer_data['action_type'] = action_type_elem.text
+
+            # Store UUID as customer_id (now as a timestamp string)
+            try:
+                # Store it as a string directly - no need to convert to int
+                customer_data['customer_id'] = uuid_elem.text
+                log_message(f"Parsed UUID timestamp: {customer_data['customer_id']}")
+            except (ValueError, TypeError):
+                log_message(f"Error: UUID must be a valid dateTime, received: {uuid_elem.text}")
+                return None
             
-            log_message(f"Basic user data: ActionType={user_data['action_type']}, UserID={user_data['user_id']}")
+            customer_data['time_of_action'] = time_of_action_elem.text
             
-            # Optional password field
-            password_elem = xml_doc.find('.//Password')
-            if password_elem is not None and password_elem.text:
-                user_data['password'] = password_elem.text
-                log_message("Found Password field")
+            log_message(f"Basic customer data: ActionType={customer_data['action_type']}, UUID={customer_data['customer_id']}")
             
             # Extract optional personal information
             optional_fields = ['FirstName', 'LastName', 'PhoneNumber', 'EmailAddress']
@@ -279,7 +282,7 @@ class UserUpdateThread(threading.Thread):
                 if element is not None and element.text:
                     # Convert XML field name to Odoo field name (camelCase to snake_case)
                     odoo_field = ''.join(['_' + c.lower() if c.isupper() else c for c in field]).lstrip('_')
-                    user_data[odoo_field] = element.text
+                    customer_data[odoo_field] = element.text
                     log_message(f"Found {field}: {element.text}")
             
             # Extract business information if present
@@ -299,57 +302,56 @@ class UserUpdateThread(threading.Thread):
                         log_message(f"Found Business.{field}: {element.text}")
                 
                 if business_data:
-                    user_data['business'] = business_data
+                    customer_data['business'] = business_data
             
-            return user_data
+            return customer_data
             
         except Exception as e:
-            log_message(f"Error parsing user data: {str(e)}")
+            log_message(f"Error parsing customer data: {str(e)}")
             log_message(traceback.format_exc())
             return None
     
-    def _process_user_data(self, user_data, env):
-        """Process the user data and update/create the user in Odoo"""
+    def _process_customer_data(self, customer_data, env):
+        """Process the customer data and update/create the customer in Odoo"""
         try:
-            user_model = env['res.users'].sudo()
             partner_model = env['res.partner'].sudo()
             
-            # Log the first 10 users in the system for debugging
-            all_users = user_model.search([], limit=10)
-            log_message(f"First 10 users in the system:")
-            for i, user in enumerate(all_users):
-                log_message(f"  User {i+1}: ID={user.id}, Login={user.login}, Name={user.name}")
+            # Log the first 10 customers in the system for debugging
+            all_customers = partner_model.search([('customer_rank', '>', 0)], limit=10)
+            log_message(f"First 10 customers in the system:")
+            for i, customer in enumerate(all_customers):
+                log_message(f"  Customer {i+1}: ID={customer.id}, Name={customer.name}, Email={customer.email}, External ID={customer.external_id}")
             
-            # Try to find the user by external ID, login, or database ID
-            user_id = user_data.get('user_id')
-            log_message(f"Looking for user with ID/login: {user_id}")
+            # Update the customer lookup code in _process_customer_data
+            customer_id = customer_data.get('customer_id')
+            log_message(f"Looking for customer with UUID (external_id): {customer_id}")
+
+            # First, try to find by external_id (highest priority)
+            customer = partner_model.search([
+                ('external_id', '=', customer_id)
+            ], limit=1)
             
-            # First try direct login match
-            users = user_model.search([('login', '=', user_id)])
-            if not users:
-                # Try to find by database ID if user_id is numeric
-                if user_id.isdigit():
-                    users = user_model.browse([int(user_id)])
-                    if users.exists():
-                        log_message(f"Found user by database ID: {user_id}")
-                    else:
-                        users = False
+            if customer:
+                log_message(f"Found customer by external_id={customer_id}: ID={customer.id}, Name={customer.name}")
+            else:
+                log_message(f"No customer found with external_id={customer_id}")
             
-            log_message(f"Found {len(users) if users else 0} users with ID/login {user_id}")
-            
-            if user_data.get('action_type') == 'UPDATE':
-                if not users:
-                    log_message(f"User with ID {user_id} not found for update")
+            if customer_data.get('action_type') == 'UPDATE':
+                if not customer:
+                    log_message(f"Customer with UUID {customer_id} not found for update")
                     return False
                     
-                log_message(f"Updating user with ID {user_id}, database ID: {users[0].id}, login: {users[0].login}")
-                user = users[0]
-                update_vals = {}
+                log_message(f"Updating customer with UUID {customer_id}, database ID: {customer.id}, external_id: {customer.external_id}")
                 
-                # Update user fields
-                if 'first_name' in user_data or 'last_name' in user_data:
-                    first_name = user_data.get('first_name', '')
-                    last_name = user_data.get('last_name', '')
+                # Always ensure external_id is set when updating by it
+                update_vals = {}
+                if not customer.external_id:
+                    update_vals['external_id'] = customer_id
+                    log_message(f"Setting missing external_id to {customer_id}")
+                    
+                if 'first_name' in customer_data or 'last_name' in customer_data:
+                    first_name = customer_data.get('first_name', '')
+                    last_name = customer_data.get('last_name', '')
                     
                     # If either is provided, create full name
                     if first_name or last_name:
@@ -363,41 +365,24 @@ class UserUpdateThread(threading.Thread):
                         else:
                             update_vals['name'] = last_name
                         
-                        log_message(f"Updating user name to: {update_vals['name']}")
+                        log_message(f"Updating customer name to: {update_vals['name']}")
                 
-                if 'email_address' in user_data:
-                    update_vals['email'] = user_data.get('email_address')
-                    update_vals['login'] = user_data.get('email_address')  # Optional: update login too
-                    log_message(f"Updating user email/login to: {update_vals['email']}")
+                if 'email_address' in customer_data:
+                    update_vals['email'] = customer_data.get('email_address')
+                    log_message(f"Updating customer email to: {update_vals['email']}")
                     
-                if 'password' in user_data:
-                    update_vals['password'] = user_data.get('password')
-                    log_message("Updating user password")
-                    
-                if update_vals:
-                    log_message(f"Writing user fields: {update_vals.keys()}")
-                    try:
-                        user.write(update_vals)
-                        log_message("User fields updated successfully")
-                    except Exception as e:
-                        log_message(f"Error updating user fields: {str(e)}")
-                        log_message(traceback.format_exc())
-                        return False
-                    
-                # Update partner fields
-                partner_vals = {}
-                if 'phone_number' in user_data:
-                    partner_vals['phone'] = user_data.get('phone_number')
-                    log_message(f"Updating partner phone to: {partner_vals['phone']}")
+                if 'phone_number' in customer_data:
+                    update_vals['phone'] = customer_data.get('phone_number')
+                    log_message(f"Updating customer phone to: {update_vals['phone']}")
                     
                 # Update business information
-                if 'business' in user_data:
-                    business = user_data.get('business')
+                if 'business' in customer_data:
+                    business = customer_data.get('business')
                     log_message(f"Processing business data: {business}")
                     
-                    # Check if partner has company info already
-                    has_company = user.partner_id.company_name or user.partner_id.parent_id
-                    log_message(f"User partner has company: {has_company}")
+                    # Check if customer is a company or has a parent company
+                    has_company = customer.company_name or customer.parent_id
+                    log_message(f"Customer has company: {has_company}")
                     
                     # If business name exists in data, process business info
                     if 'business_name' in business:
@@ -406,8 +391,13 @@ class UserUpdateThread(threading.Thread):
                         
                         if has_company:
                             # Update existing company info
-                            partner_vals['company_name'] = business_name
-                            log_message(f"Updating company name to: {business_name}")
+                            if customer.is_company:
+                                update_vals['name'] = business_name
+                                log_message(f"Updating company name to: {business_name}")
+                            else:
+                                # This is a contact under a company, update company_name field
+                                update_vals['company_name'] = business_name
+                                log_message(f"Updating company_name field to: {business_name}")
                         else:
                             # Create new company
                             log_message(f"Creating new company: {business_name}")
@@ -417,6 +407,7 @@ class UserUpdateThread(threading.Thread):
                                     'name': business_name,
                                     'is_company': True,
                                     'type': 'contact',
+                                    'customer_rank': 1,  # Mark as customer
                                 }
                                 
                                 # Add business fields if available
@@ -441,104 +432,104 @@ class UserUpdateThread(threading.Thread):
                                 log_message(f"Created new company partner with ID: {new_company_partner.id}")
                                 
                                 # Link individual to the company
-                                partner_vals['parent_id'] = new_company_partner.id
-                                log_message(f"Linking user to company with ID: {new_company_partner.id}")
+                                update_vals['parent_id'] = new_company_partner.id
+                                log_message(f"Linking customer to company with ID: {new_company_partner.id}")
                                 
                                 # Set the contact type to "contact" (individual)
-                                partner_vals['type'] = 'contact'
+                                update_vals['type'] = 'contact'
                                 
                             except Exception as e:
                                 log_message(f"Error creating company: {str(e)}")
                                 log_message(traceback.format_exc())
                                 return False
                     else:
-                        # No business name but other business fields, update as normal
+                        # No business name but other business fields
                         if 'business_email' in business:
-                            partner_vals['email'] = business.get('business_email')
-                            log_message(f"Updating business email to: {partner_vals['email']}")
+                            update_vals['email'] = business.get('business_email')
+                            log_message(f"Updating business email to: {update_vals['email']}")
                             
                         if 'real_address' in business:
-                            partner_vals['street'] = business.get('real_address')
-                            log_message(f"Updating address to: {partner_vals['street']}")
-                            
+                            update_vals['street'] = business.get('real_address')
+                            log_message(f"Updating address to: {update_vals['street']}")
+                        
                         if 'btw_number' in business:
-                            partner_vals['vat'] = business.get('btw_number')
-                            log_message(f"Updating VAT to: {partner_vals['vat']}")
+                            update_vals['vat'] = business.get('btw_number')
+                            log_message(f"Updating VAT to: {update_vals['vat']}")
                         
                         if 'facturation_address' in business:
-                            partner_vals['street2'] = business.get('facturation_address')
-                            log_message(f"Updating facturation address to: {partner_vals['street2']}")
+                            update_vals['street2'] = business.get('facturation_address')
+                            log_message(f"Updating facturation address to: {update_vals['street2']}")
                     
-                if partner_vals:
-                    log_message(f"Writing partner fields: {partner_vals.keys()}")
+                if update_vals:
+                    log_message(f"Writing customer fields: {update_vals.keys()}")
                     try:
-                        user.partner_id.write(partner_vals)
-                        log_message("Partner fields updated successfully")
+                        customer.write(update_vals)
+                        log_message("Customer fields updated successfully")
                     except Exception as e:
-                        log_message(f"Error updating partner fields: {str(e)}")
+                        log_message(f"Error updating customer fields: {str(e)}")
                         log_message(traceback.format_exc())
                         return False
                     
-                log_message(f"User {user_id} updated successfully")
+                log_message(f"Customer {customer_id} updated successfully")
                 return True
                     
-            elif user_data.get('action_type') == 'CREATE':
+            elif customer_data.get('action_type') == 'CREATE':
                 # Skip CREATE actions as they are handled by another module
-                log_message(f"CREATE action for user ID {user_id} skipped - handled by another module")
+                log_message(f"CREATE action for customer ID {customer_id} skipped - handled by another module")
                 return True  # Return True to acknowledge the message
                     
-            elif user_data.get('action_type') == 'DELETE':
-                log_message(f"handled by other module")
+            elif customer_data.get('action_type') == 'DELETE':
                 # Skip DELETE actions as they are handled by another module
+                log_message(f"DELETE action for customer ID {customer_id} skipped - handled by another module")
                 return True
                 
             else:
-                log_message(f"Unknown action type: {user_data.get('action_type')}")
+                log_message(f"Unknown action type: {customer_data.get('action_type')}")
                 return False
                 
         except Exception as e:
-            log_message(f"Unexpected error processing user data: {str(e)}")
+            log_message(f"Unexpected error processing customer data: {str(e)}")
             log_message(traceback.format_exc())
             return False
     
     def stop(self):
         """Stop the thread gracefully"""
         self.running = False
-        print("Stopping UserUpdateThread...")
+        print("Stopping CustomerUpdateThread...")
 
 # Global thread instance
-user_update_thread = None
+customer_update_thread = None
 
-class RabbitMQUserUpdate(models.AbstractModel):
-    _name = 'rabbitmq.user.update'
-    _description = 'RabbitMQ User Update Service'
+class RabbitMQCustomerUpdate(models.AbstractModel):
+    _name = 'rabbitmq.customer.update'
+    _description = 'RabbitMQ Customer Update Service'
     
     @api.model
     def start_service(self):
-        """Start the user update service if it's not already running"""
-        global user_update_thread
-        if not user_update_thread or not user_update_thread.is_alive():
-            print("Starting RabbitMQ User Update Service...")
-            user_update_thread = UserUpdateThread(self.env)
-            user_update_thread.start()
+        """Start the customer update service if it's not already running"""
+        global customer_update_thread
+        if not customer_update_thread or not customer_update_thread.is_alive():
+            print("Starting RabbitMQ Customer Update Service...")
+            customer_update_thread = CustomerUpdateThread(self.env)
+            customer_update_thread.start()
             return True
-        print("RabbitMQ User Update Service already running.")
+        print("RabbitMQ Customer Update Service already running.")
         return False
     
     @api.model
     def stop_service(self):
-        """Stop the user update service"""
-        global user_update_thread
-        if user_update_thread and user_update_thread.is_alive():
-            user_update_thread.stop()
+        """Stop the customer update service"""
+        global customer_update_thread
+        if customer_update_thread and customer_update_thread.is_alive():
+            customer_update_thread.stop()
             return True
         return False
 
-class RabbitMQUserUpdateStartup(models.AbstractModel):
-    _name = "rabbitmq.user.update.startup"
-    _description = "Start RabbitMQ User Update on Odoo startup"
+class RabbitMQCustomerUpdateStartup(models.AbstractModel):
+    _name = "rabbitmq.customer.update.startup"
+    _description = "Start RabbitMQ Customer Update on Odoo startup"
     
     @api.model
     def _register_hook(self):
         """Start the service on Odoo startup"""
-        self.env['rabbitmq.user.update'].start_service()
+        self.env['rabbitmq.customer.update'].start_service()
