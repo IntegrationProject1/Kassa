@@ -1,9 +1,9 @@
-import pika
-import logging
-import xml.etree.ElementTree as ET
+from odoo import models, fields, api
 from datetime import datetime
-from odoo import models, api
+import xml.etree.ElementTree as ET
+import pika
 import os
+import logging
 from lxml import etree
 
 _logger = logging.getLogger(__name__)
@@ -12,54 +12,88 @@ def log_message(message):
     print(f"[ORDER_MODULE] {message}")
     _logger.info(message)
 
-# XSD Schema for Order Messages
 ORDER_MESSAGE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
-    <xs:element name="Order">
-        <xs:complexType>
+  <xs:element name="Order">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Date" type="xs:dateTime"/>
+        <xs:element name="UUID" type="xs:dateTime"/>
+        <xs:element name="Products">
+          <xs:complexType>
             <xs:sequence>
-                <xs:element name="ActionType" type="xs:string"/>
-                <xs:element name="OrderID" type="xs:string"/>
-                <xs:element name="Date" type="xs:dateTime"/>
-                <xs:element name="User" type="xs:string"/>
-                <xs:element name="Customer" type="xs:string" minOccurs="0"/>
-                <xs:element name="TotalAmount" type="xs:decimal"/>
-                <xs:element name="Products" minOccurs="0">
-                    <xs:complexType>
-                        <xs:sequence>
-                            <xs:element name="Product" maxOccurs="unbounded">
-                                <xs:complexType>
-                                    <xs:sequence>
-                                        <xs:element name="ProductName" type="xs:string"/>
-                                        <xs:element name="Quantity" type="xs:decimal"/>
-                                        <xs:element name="UnitPrice" type="xs:decimal"/>
-                                        <xs:element name="TotalPrice" type="xs:decimal"/>
-                                    </xs:sequence>
-                                </xs:complexType>
-                            </xs:element>
-                        </xs:sequence>
-                    </xs:complexType>
-                </xs:element>
-                <xs:element name="Payments" minOccurs="0">
-                    <xs:complexType>
-                        <xs:sequence>
-                            <xs:element name="Payment" maxOccurs="unbounded">
-                                <xs:complexType>
-                                    <xs:sequence>
-                                        <xs:element name="PaymentMethod" type="xs:string"/>
-                                        <xs:element name="Amount" type="xs:decimal"/>
-                                    </xs:sequence>
-                                </xs:complexType>
-                            </xs:element>
-                        </xs:sequence>
-                    </xs:complexType>
-                </xs:element>
-                <xs:element name="Taxes" type="xs:decimal" minOccurs="0"/>
-                <xs:element name="TotalPaid" type="xs:decimal" minOccurs="0"/>
+              <xs:element name="Product" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="ProductNR" type="xs:decimal"/>
+                    <xs:element name="Quantity" type="xs:decimal"/>
+                    <xs:element name="UnitPrice" type="xs:decimal"/>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
             </xs:sequence>
-        </xs:complexType>
-    </xs:element>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
 </xs:schema>'''
+
+class Event(models.Model):
+    _name = 'event.event'
+    _description = 'External Event'
+    _order = 'start_datetime desc'
+
+    uuid = fields.Char(required=True, string="UUID", index=True)
+    name = fields.Char(required=True)
+    description = fields.Text()
+    start_datetime = fields.Char(required=True)
+    end_datetime = fields.Char(required=True)
+    location = fields.Char()
+    organisator = fields.Char()
+    capacity = fields.Integer()
+    event_type = fields.Char()
+
+    registered_user_ids = fields.Many2many(
+        'res.partner',
+        'event_event_res_partner_rel',
+        'event_event_id',
+        'res_partner_id',
+        string='Registered Users',
+        help='Users registered for this event (linked by external_id)',
+    )
+
+
+class EventOrder(models.Model):
+    _name = 'event.order'
+    _description = 'Order linked to an Event and User'
+
+    event_id = fields.Many2one('event.event', required=True)
+    partner_id = fields.Many2one('res.partner', required=True)
+    order_date = fields.Datetime(string='Order Date', default=fields.Datetime.now)
+    order_line_ids = fields.One2many('event.order.product', 'event_order_id', string='Order Lines')
+
+
+class EventOrderProduct(models.Model):
+    _name = 'event.order.product'
+    _description = 'Product in an Event Order'
+
+    event_order_id = fields.Many2one('event.order', required=True, ondelete='cascade')
+    product_nr = fields.Char(required=True)
+    quantity = fields.Float(required=True)
+    unit_price = fields.Float(required=True)
+
+
+class PosOrder(models.Model):
+    _inherit = 'pos.order'
+
+    @api.model
+    def create(self, vals):
+        order = super().create(vals)
+        log_message(f"Order {order.id} created, checking for event linkage.")
+        self.env['order.rabbitmq.publisher']._handle_order(order)
+        return order
+
 
 class OrderRabbitMQPublisher(models.AbstractModel):
     _name = 'order.rabbitmq.publisher'
@@ -86,59 +120,12 @@ class OrderRabbitMQPublisher(models.AbstractModel):
             log_message(f"XML validation error: {e}")
             return False
 
-    def create_order_message(self, order, action_type):
-        root = ET.Element("Order")
-        ET.SubElement(root, "ActionType").text = action_type
-        ET.SubElement(root, "OrderID").text = str(order.id)
-        ET.SubElement(root, "Date").text = order.date_order.strftime("%Y-%m-%dT%H:%M:%SZ")
-        ET.SubElement(root, "User").text = order.user_id.name or ""
-        ET.SubElement(root, "Customer").text = order.partner_id.name if order.partner_id else ""
-        
-        total_amount = abs(order.amount_total) if action_type == "refunded" else order.amount_total
-        ET.SubElement(root, "TotalAmount").text = f"{total_amount:.2f}"
-
-        if action_type in ["create", "refunded"]:
-            products = ET.SubElement(root, "Products")
-            for line in order.lines:
-                product = ET.SubElement(products, "Product")
-                ET.SubElement(product, "ProductName").text = line.product_id.name
-                qty = abs(line.qty) if action_type == "refunded" else line.qty
-                ET.SubElement(product, "Quantity").text = f"{qty:.2f}"
-                price = abs(line.price_unit) if action_type == "refunded" else line.price_unit
-                ET.SubElement(product, "UnitPrice").text = f"{price:.2f}"
-                subtotal = abs(line.price_subtotal) if action_type == "refunded" else line.price_subtotal
-                ET.SubElement(product, "TotalPrice").text = f"{subtotal:.2f}"
-
-            payments = ET.SubElement(root, "Payments")
-            for payment in order.payment_ids:
-                pmt = ET.SubElement(payments, "Payment")
-                ET.SubElement(pmt, "PaymentMethod").text = payment.payment_method_id.name
-                amount = abs(payment.amount) if action_type == "refunded" else payment.amount
-                ET.SubElement(pmt, "Amount").text = f"{amount:.2f}"
-
-            taxes = abs(order.amount_tax) if action_type == "refunded" else order.amount_tax
-            ET.SubElement(root, "Taxes").text = f"{taxes:.2f}"
-            total_paid = abs(order.amount_paid) if action_type == "refunded" else order.amount_paid
-            ET.SubElement(root, "TotalPaid").text = f"{total_paid:.2f}"
-
-        xml_str = ET.tostring(root, encoding='unicode')
-        if not self.validate_xml_against_xsd(xml_str):
-            log_message("Generated order XML failed XSD validation")
-        return xml_str
-
-    def publish_order_event(self, order, action_type):
+    def _publish_message(self, message, queue_name):
         try:
-            if order.amount_total < 0 and action_type == "create":
-                action_type = "refunded"
-                log_message(f"Auto-corrected action_type to 'refunded' for order {order.id}")
-
-            message = self.create_order_message(order, action_type)
-            queue_name = "order.created" if action_type == "create" else "order.refunded"
-            routing_key = queue_name
-
             connection = pika.BlockingConnection(self._get_rabbitmq_connection_params())
             channel = connection.channel()
 
+            routing_key = queue_name
             channel.exchange_declare(exchange='billing', exchange_type='topic', durable=True)
             channel.queue_declare(queue=queue_name, durable=True)
             channel.queue_bind(exchange='billing', queue=queue_name, routing_key=routing_key)
@@ -152,22 +139,66 @@ class OrderRabbitMQPublisher(models.AbstractModel):
                     content_type='application/xml'
                 )
             )
-            log_message(f"Published order {order.id} to {queue_name}")
+            log_message(f"Published order to {queue_name}")
             connection.close()
         except Exception as e:
-            log_message(f"Error publishing order event: {e}")
+            log_message(f"Error publishing order message: {e}")
 
-class PosOrder(models.Model):
-    _inherit = 'pos.order'
+    def _handle_order(self, order):
+        now = datetime.utcnow()
+        partner = order.partner_id
 
-    @api.model
-    def create(self, vals):
-        order = super().create(vals)
-        self.env['order.rabbitmq.publisher'].publish_order_event(order, 'create')
-        return order
+        event = self.env['event.event'].search([
+            ('start_datetime', '<=', now.strftime('%Y-%m-%d %H:%M:%S')),
+            ('end_datetime', '>=', now.strftime('%Y-%m-%d %H:%M:%S')),
+            ('registered_user_ids', 'in', partner.id)
+        ], limit=1)
 
-    def action_pos_order_refund(self):
-        result = super().action_pos_order_refund()
-        for order in self:
-            self.env['order.rabbitmq.publisher'].publish_order_event(order, 'refunded')
-        return result
+        if event:
+            log_message(f"Found active event '{event.name}' for user '{partner.name}'")
+            self._store_event_order(order, event)
+        else:
+            log_message(f"No active event found for user '{partner.name}', sending to queue")
+            self._publish_order_to_queue(order)
+
+    def _store_event_order(self, order, event):
+        event_order = self.env['event.order'].create({
+            'event_id': event.id,
+            'partner_id': order.partner_id.id,
+            'order_date': fields.Datetime.now(),
+        })
+        for line in order.lines:
+            self.env['event.order.product'].create({
+                'event_order_id': event_order.id,
+                'product_nr': str(line.product_id.id),
+                'quantity': line.qty,
+                'unit_price': line.price_unit,
+            })
+        log_message(f"Order {order.id} stored in event '{event.name}'")
+
+    def _publish_order_to_queue(self, order):
+        partner = order.partner_id
+        uuid_value = partner.external_id
+
+        if not uuid_value:
+            log_message(f"Missing external_id for partner {partner.name}, skipping publish")
+            return
+
+        root = ET.Element("Order")
+        ET.SubElement(root, "Date").text = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        ET.SubElement(root, "UUID").text = uuid_value
+
+        products = ET.SubElement(root, "Products")
+        for line in order.lines:
+            product = ET.SubElement(products, "Product")
+            ET.SubElement(product, "ProductNR").text = str(line.product_id.id)
+            ET.SubElement(product, "Quantity").text = f"{line.qty:.2f}"
+            ET.SubElement(product, "UnitPrice").text = f"{line.price_unit:.2f}"
+
+        xml_str = ET.tostring(root, encoding='unicode')
+
+        if not self.validate_xml_against_xsd(xml_str):
+            log_message("Generated order XML failed XSD validation")
+            return
+
+        self._publish_message(xml_str, queue_name="order.created")
