@@ -63,6 +63,47 @@ class Event(models.Model):
         help='Users registered for this event (linked by external_id)',
     )
 
+    is_invoiced = fields.Boolean(string='Is Invoiced', default=False, 
+                                 help='Indicates if this event has been invoiced')
+
+    def action_send_invoices(self):
+        """
+        Handmatig facturen versturen naar facturatie service - alleen voor orders op rekening
+        """
+        self.ensure_one()
+        log_message(f"=== Manual invoice action triggered for event {self.name} ===")
+        
+        if self.is_invoiced:
+            log_message(f"Event {self.name} is already invoiced, showing warning")
+            return {
+                'type': 'ir.actions.client',
+                'tag': 'display_notification',
+                'params': {
+                    'title': 'Al gefactureerd',
+                    'message': 'Dit event is al gefactureerd.',
+                    'type': 'warning',
+                }
+            }
+        
+        log_message(f"Delegating billing to RabbitMQ publisher for event {self.name}")
+        # Delegeer facturatie naar RabbitMQ publisher
+        self.env['order.rabbitmq.publisher']._process_event_billing(self)
+        
+        # Markeer event als gefactureerd
+        log_message(f"Marking event {self.name} as invoiced")
+        self.write({'is_invoiced': True})
+        
+        log_message(f"Invoice action completed for event {self.name}")
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': 'Facturatie succesvol',
+                'message': 'Alleen orders op rekening zijn doorgestuurd naar de facturatieservice.',
+                'type': 'success',
+            }
+        }
+
 
 class EventOrder(models.Model):
     _name = 'event.order'
@@ -72,6 +113,7 @@ class EventOrder(models.Model):
     partner_id = fields.Many2one('res.partner', required=True)
     order_date = fields.Datetime(string='Order Date', default=fields.Datetime.now)
     order_line_ids = fields.One2many('event.order.product', 'event_order_id', string='Order Lines')
+    origin_pos_order_id = fields.Many2one('pos.order', string='Origin POS Order')
 
 
 class EventOrderProduct(models.Model):
@@ -112,12 +154,21 @@ class OrderRabbitMQPublisher(models.AbstractModel):
 
     def validate_xml_against_xsd(self, xml_string):
         try:
+            log_message(f"Validating XML against XSD schema")
             xml_doc = etree.fromstring(xml_string.encode('utf-8'))
             xsd_doc = etree.fromstring(ORDER_MESSAGE_XSD.encode('utf-8'))
             schema = etree.XMLSchema(xsd_doc)
-            return schema.validate(xml_doc)
+            is_valid = schema.validate(xml_doc)
+            
+            if is_valid:
+                log_message(f"XML validation successful")
+            else:
+                validation_errors = schema.error_log
+                log_message(f"XML validation failed with errors: {validation_errors}")
+                
+            return is_valid
         except Exception as e:
-            log_message(f"XML validation error: {e}")
+            log_message(f"XML validation error: {str(e)}")
             return False
 
     def _publish_message(self, message, queue_name):
@@ -145,8 +196,36 @@ class OrderRabbitMQPublisher(models.AbstractModel):
             log_message(f"Error publishing order message: {e}")
 
     def _handle_order(self, order):
+        # Check betaalmethode - alleen orders op rekening doorsturen
+        log_message(f"=== Handling order {order.id} for partner {order.partner_id.name} ===")
+        
+        is_account_payment = False
+        payment_methods = []
+        
+        # Check of een van de betalingen een "customer account" type is
+        for payment in order.payment_ids:
+            payment_name = payment.payment_method_id.name
+            payment_methods.append(payment_name)
+            log_message(f"Payment method found: {payment_name} (is_cash={payment.payment_method_id.is_cash_count}, uses_terminal={payment.payment_method_id.use_payment_terminal})")
+            
+            # In Odoo POS is 'account' meestal de betaalmethode voor klantrekeningen
+            if payment.payment_method_id.use_payment_terminal == False and \
+               payment.payment_method_id.is_cash_count == False:
+                is_account_payment = True
+                log_message(f"Found account payment method: {payment_name}")
+        
+        log_message(f"Order {order.id} payment methods: {', '.join(payment_methods)}")
+        
+        # Als het geen account payment is, sla deze over voor facturatie
+        if not is_account_payment:
+            log_message(f"Order {order.id} is paid with cash/card, skipping invoice processing")
+            return
+        
+        log_message(f"Order {order.id} is paid on account, processing for invoicing")
+        
         now = datetime.utcnow()
         partner = order.partner_id
+        log_message(f"Checking if partner {partner.name} is registered for any active events")
 
         event = self.env['event.event'].search([
             ('start_datetime', '<=', now.strftime('%Y-%m-%d %H:%M:%S')),
@@ -155,10 +234,10 @@ class OrderRabbitMQPublisher(models.AbstractModel):
         ], limit=1)
 
         if event:
-            log_message(f"Found active event '{event.name}' for user '{partner.name}'")
+            log_message(f"Found active event '{event.name}' for user '{partner.name}', will store for bulk processing")
             self._store_event_order(order, event)
         else:
-            log_message(f"No active event found for user '{partner.name}', sending to queue")
+            log_message(f"No active event found for user '{partner.name}', sending directly to queue")
             self._publish_order_to_queue(order)
 
     def _store_event_order(self, order, event):
@@ -166,6 +245,7 @@ class OrderRabbitMQPublisher(models.AbstractModel):
             'event_id': event.id,
             'partner_id': order.partner_id.id,
             'order_date': fields.Datetime.now(),
+            'origin_pos_order_id': order.id,  # Referentie naar originele POS-order
         })
         for line in order.lines:
             self.env['event.order.product'].create({
@@ -202,3 +282,173 @@ class OrderRabbitMQPublisher(models.AbstractModel):
             return
 
         self._publish_message(xml_str, queue_name="order.created")
+
+    @api.model
+    def send_event_summary_to_billing(self, event_id=None):
+        """
+        Verzamel alle aankopen per gebruiker voor een afgelopen event en stuur naar facturatie,
+        maar alleen als het event nog niet eerder is gefactureerd.
+        Als event_id is opgegeven, verwerk alleen dat event. Anders verwerk alle net afgelopen events.
+        """
+        # Zoek events die zojuist zijn afgelopen (laatste uur) en nog niet gefactureerd zijn
+        now = datetime.utcnow()
+        one_hour_ago = now - datetime.timedelta(hours=1)
+        
+        domain = [
+            ('end_datetime', '>=', one_hour_ago.strftime('%Y-%m-%d %H:%M:%S')),
+            ('end_datetime', '<=', now.strftime('%Y-%m-%d %H:%M:%S')),
+            ('is_invoiced', '=', False)  # Alleen niet-gefactureerde events
+        ]
+        
+        if event_id:
+            domain.append(('id', '=', event_id))
+        
+        events = self.env['event.event'].search(domain)
+        log_message(f"Checking {len(events)} events for end-of-event billing")
+        
+        for event in events:
+            self._process_event_billing(event)
+            # Markeer event als gefactureerd na verwerking
+            event.write({'is_invoiced': True})
+        
+        return True
+    
+    def _process_event_billing(self, event):
+        """Verwerk de facturatie voor één event - alleen voor rekening-orders"""
+        log_message(f"========================================")
+        log_message(f"Processing end-of-event billing for event: {event.name} (UUID: {event.uuid})")
+        log_message(f"Event period: {event.start_datetime} to {event.end_datetime}")
+        log_message(f"Registered users: {len(event.registered_user_ids)}")
+        
+        # Controleer of event al is gefactureerd
+        if event.is_invoiced:
+            log_message(f"Event {event.name} already invoiced, skipping")
+            return
+        
+        # Verzamel alle orders voor dit event
+        event_orders = self.env['event.order'].search([('event_id', '=', event.id)])
+        log_message(f"Found {len(event_orders)} total orders for event {event.name}")
+        
+        if not event_orders:
+            log_message(f"No orders found for event {event.name}, skipping billing")
+            return
+        
+        # Groepeer orders per gebruiker - check alleen account payments
+        user_orders = {}
+        for registered_user in event.registered_user_ids:
+            log_message(f"------------------------------------------")
+            log_message(f"Processing user: {registered_user.name} (ID: {registered_user.id})")
+            
+            if not registered_user.external_id:
+                log_message(f"User {registered_user.name} has no external_id, skipping")
+                continue
+            else:
+                log_message(f"User {registered_user.name} external_id: {registered_user.external_id}")
+                    
+            # Verzamel alle order lines voor deze gebruiker tijdens dit event
+            user_event_orders = event_orders.filtered(lambda o: o.partner_id.id == registered_user.id)
+            log_message(f"Found {len(user_event_orders)} event orders for user {registered_user.name}")
+            
+            if not user_event_orders:
+                log_message(f"No orders for user {registered_user.name} in event {event.name}")
+                continue
+            
+            # Filter orders om alleen rekening-orders te selecteren
+            account_orders = []
+            for user_order in user_event_orders:
+                log_message(f"Checking origin POS order for event order {user_order.id}")
+                # Get the original POS order
+                pos_order = self.env['pos.order'].search([
+                    ('id', '=', user_order.origin_pos_order_id.id)
+                ], limit=1)
+                
+                if not pos_order:
+                    log_message(f"No original POS order found for event order {user_order.id}, skipping")
+                    continue
+                
+                log_message(f"Found original POS order: {pos_order.id}, checking payment methods")
+                    
+                # Check payment method
+                is_account = False
+                for payment in pos_order.payment_ids:
+                    payment_name = payment.payment_method_id.name
+                    log_message(f"Payment method: {payment_name} (is_cash={payment.payment_method_id.is_cash_count}, uses_terminal={payment.payment_method_id.use_payment_terminal})")
+                    
+                    if payment.payment_method_id.use_payment_terminal == False and \
+                       payment.payment_method_id.is_cash_count == False:
+                        is_account = True
+                        log_message(f"Found account payment method: {payment_name} for order {pos_order.id}")
+                        break
+                            
+                if is_account:
+                    log_message(f"Order {pos_order.id} is on account, adding to billing")
+                    account_orders.append(user_order)
+                else:
+                    log_message(f"Order {pos_order.id} is NOT on account, skipping")
+            
+            log_message(f"Found {len(account_orders)} account-based orders for user {registered_user.name}")
+            
+            if not account_orders:
+                log_message(f"No account-based orders for user {registered_user.name}, skipping")
+                continue
+                    
+            # Voor elke gebruiker, verzamel producten met totale hoeveelheden en prijzen
+            product_summary = {}
+            for order in account_orders:
+                log_message(f"Processing order {order.id} with {len(order.order_line_ids)} line items")
+                for line in order.order_line_ids:
+                    product_nr = line.product_nr
+                    if product_nr not in product_summary:
+                        product_summary[product_nr] = {
+                            'quantity': 0,
+                            'unit_price': line.unit_price  # Neem de laatste prijs
+                        }
+                        log_message(f"Added new product {product_nr} to summary")
+                    
+                    product_summary[product_nr]['quantity'] += line.quantity
+                    log_message(f"Updated product {product_nr}: quantity={product_summary[product_nr]['quantity']}, unit_price={product_summary[product_nr]['unit_price']}")
+            
+            # Alleen doorgaan als er producten zijn voor deze gebruiker
+            if product_summary:
+                log_message(f"Product summary for user {registered_user.name}: {len(product_summary)} products")
+                user_orders[registered_user.external_id] = product_summary
+            else:
+                log_message(f"No products found for user {registered_user.name}, skipping")
+        
+        # Maak en verstuur een bericht voor elke gebruiker
+        log_message(f"------------------------------------------")
+        log_message(f"Processing billing for {len(user_orders)} users with account orders")
+        
+        for user_uuid, products in user_orders.items():
+            log_message(f"Sending billing for user {user_uuid} with {len(products)} products")
+            self._send_user_event_summary(event, user_uuid, products)
+        
+        log_message(f"Completed billing processing for event {event.name}")
+        log_message(f"========================================")
+    
+    def _send_user_event_summary(self, event, user_uuid, products):
+        """Maak en verstuur een samenvattingsbericht voor één gebruiker"""
+        log_message(f"Creating billing XML for user {user_uuid} in event {event.name}")
+        
+        root = ET.Element("Order")
+        ET.SubElement(root, "Date").text = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        ET.SubElement(root, "UUID").text = user_uuid
+        ET.SubElement(root, "EventUUID").text = event.uuid
+        
+        products_element = ET.SubElement(root, "Products")
+        for product_nr, details in products.items():
+            product = ET.SubElement(products_element, "Product")
+            ET.SubElement(product, "ProductNR").text = product_nr
+            ET.SubElement(product, "Quantity").text = f"{details['quantity']:.2f}"
+            ET.SubElement(product, "UnitPrice").text = f"{details['unit_price']:.2f}"
+            log_message(f"Added product {product_nr}: quantity={details['quantity']}, unit_price={details['unit_price']}")
+        
+        xml_str = ET.tostring(root, encoding='unicode')
+        log_message(f"Generated XML:\n{xml_str}")
+        
+        if not self.validate_xml_against_xsd(xml_str):
+            log_message(f"Generated event summary XML for user {user_uuid} failed XSD validation")
+            return
+        
+        log_message(f"Sending event summary for user {user_uuid} in event {event.name} to queue")
+        self._publish_message(xml_str, queue_name="facturatie.order.event")
