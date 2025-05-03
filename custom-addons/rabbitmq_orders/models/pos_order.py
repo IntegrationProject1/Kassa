@@ -1,5 +1,6 @@
 from odoo import models, fields, api
-from datetime import datetime
+import datetime
+from datetime import timedelta
 import xml.etree.ElementTree as ET
 import pika
 import os
@@ -223,7 +224,7 @@ class OrderRabbitMQPublisher(models.AbstractModel):
         
         log_message(f"Order {order.id} is paid on account, processing for invoicing")
         
-        now = datetime.utcnow()
+        now = datetime.datetime.utcnow()
         partner = order.partner_id
         log_message(f"Checking if partner {partner.name} is registered for any active events")
 
@@ -265,7 +266,7 @@ class OrderRabbitMQPublisher(models.AbstractModel):
             return
 
         root = ET.Element("Order")
-        ET.SubElement(root, "Date").text = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        ET.SubElement(root, "Date").text = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
         ET.SubElement(root, "UUID").text = uuid_value
 
         products = ET.SubElement(root, "Products")
@@ -286,32 +287,102 @@ class OrderRabbitMQPublisher(models.AbstractModel):
     @api.model
     def send_event_summary_to_billing(self, event_id=None):
         """
-        Verzamel alle aankopen per gebruiker voor een afgelopen event en stuur naar facturatie,
-        maar alleen als het event nog niet eerder is gefactureerd.
-        Als event_id is opgegeven, verwerk alleen dat event. Anders verwerk alle net afgelopen events.
+        Verzamel alle aankopen per gebruiker voor een afgelopen event en stuur naar facturatie.
+        Alleen events die recent zijn afgelopen worden verwerkt, tenzij een specifiek event_id is opgegeven.
         """
-        # Zoek events die zojuist zijn afgelopen (laatste uur) en nog niet gefactureerd zijn
-        now = datetime.utcnow()
-        one_hour_ago = now - datetime.timedelta(hours=1)
+        try:
+            log_message(f"====================================================")
+            log_message(f"CRON JOB: Checking for recently ended events to bill")
+            log_message(f"Current time: {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
+            log_message(f"Specific event_id requested: {event_id or 'No'}")
+            
+            # Toon de laatste 3 events om debugging mogelijk te maken
+            recent_events = self.env['event.event'].search([], order='id desc', limit=3)
+            log_message(f"Most recent events in system (for reference):")
+            for event in recent_events:
+                log_message(f"  - Event: {event.name} (ID: {event.id})")
+                log_message(f"  - Start: {event.start_datetime}")
+                log_message(f"  - End: {event.end_datetime}")
+                log_message(f"  - Invoiced: {event.is_invoiced}")
+            
+            # Zoek events die zojuist zijn afgelopen
+            log_message(f"Starting to process events...")
+            now = datetime.datetime.now()
+            log_message(f"Now (local): {now}")
+            one_hour_ago = now - timedelta(hours=1)
+            log_message(f"One hour ago: {one_hour_ago}")
+            
+            # Haal niet-gefactureerde events op
+            domain = [('is_invoiced', '=', False)]
+            
+            # Als een specifiek event_id is opgegeven, gebruik alleen dat event
+            if event_id:
+                domain.append(('id', '=', event_id))
+                log_message(f"Filtering for specific event ID: {event_id}")
+            else:
+                # Anders, filter events die recent zijn afgelopen
+                # Probeer parse te doen op end_datetime, vang fouten op voor verschillende formaten
+                candidates = self.env['event.event'].search(domain)
+                ended_events = []
+                
+                for event in candidates:
+                    log_message(f"Checking if event {event.name} (ID: {event.id}) has ended")
+                    try:
+                        # Probeer ISO format (met T separator)
+                        if 'T' in event.end_datetime:
+                            end_dt_str = event.end_datetime.replace('Z', '+00:00')
+                            end_dt = datetime.datetime.fromisoformat(end_dt_str)
+                            log_message(f"  - End time parsed as ISO: {end_dt}")
+                        else:
+                            # Probeer standaard Odoo format
+                            end_dt = datetime.datetime.strptime(event.end_datetime, '%Y-%m-%d %H:%M:%S')
+                            log_message(f"  - End time parsed as standard: {end_dt}")
+                        
+                        # Check of event is afgelopen (eindtijd < nu)
+                        if end_dt < now:
+                            log_message(f"  - Event has ended, adding to processing list")
+                            ended_events.append(event.id)
+                        else:
+                            log_message(f"  - Event has not ended yet, skipping")
+                    except Exception as e:
+                        log_message(f"  - Error parsing end date: {str(e)}, skipping event")
+                
+                if ended_events:
+                    domain.append(('id', 'in', ended_events))
+                    log_message(f"Filtering for ended events: {ended_events}")
+                else:
+                    log_message(f"No ended events found")
+            
+            log_message(f"Final search domain: {domain}")
+            
+            # Voer zoekopdracht uit met volledige filtering
+            all_events = self.env['event.event'].search(domain)
+            log_message(f"Found {len(all_events)} non-invoiced ended events to process")
+            
+            # Verwerk alle geselecteerde events
+            processed_count = 0
+            for event in all_events:
+                log_message(f"Processing event: {event.name} (ID: {event.id})")
+                self._process_event_billing(event)
+                event.write({'is_invoiced': True})
+                log_message(f"Successfully processed event {event.name}")
+                processed_count += 1
+            
+            if processed_count == 0:
+                log_message(f"No events were processed")
+            else:
+                log_message(f"Successfully processed {processed_count} events")
+            
+            log_message(f"CRON JOB: End of events check")
+            log_message(f"====================================================")
+            return True
         
-        domain = [
-            ('end_datetime', '>=', one_hour_ago.strftime('%Y-%m-%d %H:%M:%S')),
-            ('end_datetime', '<=', now.strftime('%Y-%m-%d %H:%M:%S')),
-            ('is_invoiced', '=', False)  # Alleen niet-gefactureerde events
-        ]
-        
-        if event_id:
-            domain.append(('id', '=', event_id))
-        
-        events = self.env['event.event'].search(domain)
-        log_message(f"Checking {len(events)} events for end-of-event billing")
-        
-        for event in events:
-            self._process_event_billing(event)
-            # Markeer event als gefactureerd na verwerking
-            event.write({'is_invoiced': True})
-        
-        return True
+        except Exception as e:
+            # Log de fout om te zien waar de code vastloopt
+            log_message(f"ERROR in send_event_summary_to_billing: {str(e)}")
+            import traceback
+            log_message(traceback.format_exc())
+            return False
     
     def _process_event_billing(self, event):
         """Verwerk de facturatie voor één event - alleen voor rekening-orders"""
@@ -431,7 +502,7 @@ class OrderRabbitMQPublisher(models.AbstractModel):
         log_message(f"Creating billing XML for user {user_uuid} in event {event.name}")
         
         root = ET.Element("Order")
-        ET.SubElement(root, "Date").text = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        ET.SubElement(root, "Date").text = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
         ET.SubElement(root, "UUID").text = user_uuid
         ET.SubElement(root, "EventUUID").text = event.uuid
         
