@@ -1,9 +1,9 @@
-import pika
-import logging
-import xml.etree.ElementTree as ET
-from datetime import datetime
 from odoo import models, fields, api
+from datetime import datetime
+import xml.etree.ElementTree as ET
+import pika
 import os
+import logging
 from lxml import etree
 
 _logger = logging.getLogger(__name__)
@@ -12,9 +12,6 @@ def log_message(message):
     print(f"[ORDER_MODULE] {message}")
     _logger.info(message)
 
-print("[ORDER_MODULE] Starting Order RabbitMQ Publisher...")
-
-# XSD Schema for Order Messages (updated)
 ORDER_MESSAGE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <xs:element name="Order">
@@ -41,6 +38,62 @@ ORDER_MESSAGE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
     </xs:complexType>
   </xs:element>
 </xs:schema>'''
+
+class Event(models.Model):
+    _name = 'event.event'
+    _description = 'External Event'
+    _order = 'start_datetime desc'
+
+    uuid = fields.Char(required=True, string="UUID", index=True)
+    name = fields.Char(required=True)
+    description = fields.Text()
+    start_datetime = fields.Char(required=True)
+    end_datetime = fields.Char(required=True)
+    location = fields.Char()
+    organisator = fields.Char()
+    capacity = fields.Integer()
+    event_type = fields.Char()
+
+    registered_user_ids = fields.Many2many(
+        'res.partner',
+        'event_event_res_partner_rel',
+        'event_event_id',
+        'res_partner_id',
+        string='Registered Users',
+        help='Users registered for this event (linked by external_id)',
+    )
+
+
+class EventOrder(models.Model):
+    _name = 'event.order'
+    _description = 'Order linked to an Event and User'
+
+    event_id = fields.Many2one('event.event', required=True)
+    partner_id = fields.Many2one('res.partner', required=True)
+    order_date = fields.Datetime(string='Order Date', default=fields.Datetime.now)
+    order_line_ids = fields.One2many('event.order.product', 'event_order_id', string='Order Lines')
+
+
+class EventOrderProduct(models.Model):
+    _name = 'event.order.product'
+    _description = 'Product in an Event Order'
+
+    event_order_id = fields.Many2one('event.order', required=True, ondelete='cascade')
+    product_nr = fields.Char(required=True)
+    quantity = fields.Float(required=True)
+    unit_price = fields.Float(required=True)
+
+
+class PosOrder(models.Model):
+    _inherit = 'pos.order'
+
+    @api.model
+    def create(self, vals):
+        order = super().create(vals)
+        log_message(f"Order {order.id} created, checking for event linkage.")
+        self.env['order.rabbitmq.publisher']._handle_order(order)
+        return order
+
 
 class OrderRabbitMQPublisher(models.AbstractModel):
     _name = 'order.rabbitmq.publisher'
@@ -91,78 +144,61 @@ class OrderRabbitMQPublisher(models.AbstractModel):
         except Exception as e:
             log_message(f"Error publishing order message: {e}")
 
-    def publish_orders_for_session(self, session):
-        log_message(f"Publishing orders for session: {session.name}")
-        orders_by_customer = {}
-        for order in session.order_ids.filtered(lambda o: o.state == 'done'):
-            if not order.partner_id:
-                continue
-            customer_id = order.partner_id.id
-            orders_by_customer.setdefault(customer_id, []).append(order)
+    def _handle_order(self, order):
+        now = datetime.utcnow()
+        partner = order.partner_id
 
-        for customer_orders in orders_by_customer.values():
-            self.publish_consolidated_order(customer_orders)
+        event = self.env['event.event'].search([
+            ('start_datetime', '<=', now.strftime('%Y-%m-%d %H:%M:%S')),
+            ('end_datetime', '>=', now.strftime('%Y-%m-%d %H:%M:%S')),
+            ('registered_user_ids', 'in', partner.id)
+        ], limit=1)
 
-    def publish_consolidated_order(self, orders):
-        if not orders:
+        if event:
+            log_message(f"Found active event '{event.name}' for user '{partner.name}'")
+            self._store_event_order(order, event)
+        else:
+            log_message(f"No active event found for user '{partner.name}', sending to queue")
+            self._publish_order_to_queue(order)
+
+    def _store_event_order(self, order, event):
+        event_order = self.env['event.order'].create({
+            'event_id': event.id,
+            'partner_id': order.partner_id.id,
+            'order_date': fields.Datetime.now(),
+        })
+        for line in order.lines:
+            self.env['event.order.product'].create({
+                'event_order_id': event_order.id,
+                'product_nr': str(line.product_id.id),
+                'quantity': line.qty,
+                'unit_price': line.price_unit,
+            })
+        log_message(f"Order {order.id} stored in event '{event.name}'")
+
+    def _publish_order_to_queue(self, order):
+        partner = order.partner_id
+        uuid_value = partner.external_id
+
+        if not uuid_value:
+            log_message(f"Missing external_id for partner {partner.name}, skipping publish")
             return
 
         root = ET.Element("Order")
-
-        current_timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-        ET.SubElement(root, "Date").text = current_timestamp
-
-        partner = orders[0].partner_id
-        uuid_value = partner.external_id
-
-        # 🔒 Consistent with customer create: fail hard if UUID is missing
-        if not uuid_value:
-            error_msg = f"Missing external_id (UUID) for partner '{partner.name}' (ID: {partner.id})"
-            log_message(error_msg)
-            raise ValueError(error_msg)
-
+        ET.SubElement(root, "Date").text = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
         ET.SubElement(root, "UUID").text = uuid_value
 
-        # ➕ Products
         products = ET.SubElement(root, "Products")
-        for order in orders:
-            for line in order.lines:
-                product = ET.SubElement(products, "Product")
-                ET.SubElement(product, "ProductNR").text = str(line.product_id.id)
-                ET.SubElement(product, "Quantity").text = f"{line.qty:.2f}"
-                ET.SubElement(product, "UnitPrice").text = f"{line.price_unit:.2f}"
+        for line in order.lines:
+            product = ET.SubElement(products, "Product")
+            ET.SubElement(product, "ProductNR").text = str(line.product_id.id)
+            ET.SubElement(product, "Quantity").text = f"{line.qty:.2f}"
+            ET.SubElement(product, "UnitPrice").text = f"{line.price_unit:.2f}"
 
         xml_str = ET.tostring(root, encoding='unicode')
 
         if not self.validate_xml_against_xsd(xml_str):
-            log_message("Generated consolidated order XML failed XSD validation")
-        else:
-            self._publish_message(xml_str, queue_name="order.created")
+            log_message("Generated order XML failed XSD validation")
+            return
 
-
-class PosOrder(models.Model):
-    _inherit = 'pos.order'
-
-    @api.model
-    def create(self, vals):
-        order = super().create(vals)
-        log_message(f"Order {order.id} created but not published (will publish on session close).")
-        return order
-
-class PosSession(models.Model):
-    _inherit = 'pos.session'
-
-    def action_pos_session_open(self):
-        log_message(f"POS session '{self.name}' is being opened.")
-        return super().action_pos_session_open()
-
-    def action_pos_session_close(self, balancing_account=False, amount_to_balance=0.0, bank_payment_method_diffs=None):
-        result = super().action_pos_session_close(
-            balancing_account,
-            amount_to_balance,
-            bank_payment_method_diffs
-        )
-        for session in self:
-            log_message(f"POS session '{session.name}' is fully closed. Now publishing orders.")
-            self.env['order.rabbitmq.publisher'].publish_orders_for_session(session)
-        return result
+        self._publish_message(xml_str, queue_name="order.created")
