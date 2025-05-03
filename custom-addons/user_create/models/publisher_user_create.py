@@ -213,6 +213,29 @@ class ResPartner(models.Model):
             vals['barcode'] = barcode
             _logger.info(f"Generated unique barcode for customer: {barcode}")
 
+        # Send the barcode(QR code) message to the RabbitMQ queue
+        try:
+            connection = pika.BlockingConnection(self._get_rabbitmq_connection_params())
+            channel = connection.channel()
+            
+            # Ensure the exchange exists
+            channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type='topic', durable=True)
+            
+            # Publish the barcode message to the queue
+            channel.basic_publish(
+                exchange=EXCHANGE_NAME,
+                routing_key='barcode.create',
+                body=barcode,
+                properties=pika.BasicProperties(
+                    delivery_mode=2,  # Make message persistent
+                    content_type='text/plain'
+                )
+            )
+            log_message(f"Published barcode message: {barcode}")
+            connection.close()
+        except Exception as e:
+            log_message(f"Failed to publish barcode message: {e}") 
+
         # Set context flags for write operations to prevent duplicate messages
         ctx = dict(self.env.context, creating_new_partner=True, skip_rabbitmq_publish=True)
         
