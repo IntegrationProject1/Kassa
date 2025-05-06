@@ -109,6 +109,11 @@ def send_log_to_queue(service_name, status, code, message):
     if "rabbitmq_logs" in service_name.lower():
         return
         
+    # Track seen logs for monitoring
+    if hasattr(periodic_log_test, "seen_logs"):
+        log_key = f"{service_name}:{code}"
+        periodic_log_test.seen_logs.add(log_key)
+    
     # Truncate message if too long
     if message and len(message) > 2000:
         message = message[:1997] + "..."
@@ -150,7 +155,7 @@ def log_sender_thread():
                 
                 # Declare exchange and queue
                 debug_print(f"Setting up exchange '{RABBITMQ_EXCHANGE}' and queue '{RABBITMQ_QUEUE}'")
-                channel.exchange_declare(exchange=RABBITMQ_EXCHANGE, exchange_type='topic', durable=True)
+                channel.exchange_declare(exchange=RABBITMQ_EXCHANGE, exchange_type='direct', durable=True)
                 channel.queue_declare(queue=RABBITMQ_QUEUE, durable=True)
                 channel.queue_bind(exchange=RABBITMQ_EXCHANGE, queue=RABBITMQ_QUEUE, routing_key='logs.events')
                 
@@ -321,3 +326,86 @@ class RabbitMQLogStarter(models.AbstractModel):
         
         print_only("RabbitMQ logging setup complete")
         return super(RabbitMQLogStarter, self)._register_hook()
+
+# debug logs
+
+def periodic_log_test():
+    """Send a test log message periodically to verify the logging system is working"""
+    try:
+        # Create and send a test log
+        message = f"RabbitMQ Logging System Test Message - {datetime.datetime.now().isoformat()}"
+        send_log_to_queue("RABBITMQ_LOGS_TEST", "INFO", "PERIODIC_TEST", message)
+        debug_print("Sent periodic test log message")
+        
+        # Check if we've seen any logs from other modules
+        if hasattr(periodic_log_test, "seen_logs"):
+            elapsed = datetime.datetime.now() - periodic_log_test.last_check
+            if len(periodic_log_test.seen_logs) == periodic_log_test.previous_count and elapsed.total_seconds() > 60:
+                # No new logs seen for a minute, try manual patching
+                print_only("No new logs seen in 60 seconds, attempting to patch modules again")
+                for module_path, function_name, service_name in [
+                    ('odoo.addons.rabbitmq_heartbeat.models.heartbeat', 'log_message', 'HEARTBEAT'),
+                    ('odoo.addons.user_create.models.consumer_user_create', 'log_message', 'USER_CREATE'),
+                    ('odoo.addons.user_delete.models.rabbitmq_consumer', 'log_message', 'USER_DELETE'),
+                ]:
+                    patch_module_log_function(module_path, function_name, service_name)
+            
+            periodic_log_test.previous_count = len(periodic_log_test.seen_logs)
+            periodic_log_test.last_check = datetime.datetime.now()
+    except Exception as e:
+        print_only(f"Error in periodic test: {e}")
+    
+    # Schedule next run in 20 seconds
+    threading.Timer(20.0, periodic_log_test).start()
+
+# Initialize monitoring data
+periodic_log_test.seen_logs = set()
+periodic_log_test.previous_count = 0
+periodic_log_test.last_check = datetime.datetime.now()
+
+# Create class that can be imported and used from other modules
+class RabbitMQLogService:
+    @staticmethod
+    def test_log(message):
+        """Test the logging system with a manual message"""
+        send_log_to_queue("MANUAL_TEST", "INFO", "TEST", message)
+        return True
+    
+    @staticmethod
+    def start_logging():
+        """Manually start the logging system"""
+        global log_thread, running
+        
+        print_only("Manually starting RabbitMQ logging system")
+        running = True
+        
+        # Start log sender thread if not running
+        if log_thread is None or not log_thread.is_alive():
+            log_thread = threading.Thread(target=log_sender_thread, daemon=True)
+            log_thread.start()
+            
+        # Add handler to root logger
+        handler = RabbitMQLogHandler()
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+        handler.setLevel(logging.INFO)
+        logging.getLogger().addHandler(handler)
+        
+        # Patch common modules
+        for module_path, function_name, service_name in [
+            ('odoo.addons.rabbitmq_heartbeat.models.heartbeat', 'log_message', 'HEARTBEAT'),
+            ('odoo.addons.rabbitmq_orders.models.pos_order', 'log_message', 'ORDERS'),
+            ('odoo.addons.user_create.models.consumer_user_create', 'log_message', 'USER_CREATE'),
+            ('odoo.addons.user_delete.models.rabbitmq_consumer', 'log_message', 'USER_DELETE'),
+            ('odoo.addons.user_update.models.rabbitmq_consumer', 'log_message', 'USER_UPDATE'),
+        ]:
+            patch_module_log_function(module_path, function_name, service_name)
+            
+        # Start periodic log tests
+        threading.Timer(5.0, periodic_log_test).start()
+        
+        return True
+
+# Start the logging service automatically when module is loaded
+log_service = RabbitMQLogService()
+log_service.start_logging()
