@@ -8,18 +8,38 @@ from lxml import etree
 import datetime
 import traceback
 import io
+import sys
+import queue
 from odoo import models, api
+
+# Add more descriptive prefix for clearer logs
+DEBUG_PREFIX = "[RABBITMQ_LOGS_DEBUG]"
+LOG_PREFIX = "[RABBITMQ_LOGS]"
 
 _logger = logging.getLogger(__name__)
 
 # RabbitMQ configuration
-RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST')
-RABBITMQ_PORT = int(os.environ.get('RABBITMQ_PORT', 5672))
+RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'integrationproject-2425s2-001.westeurope.cloudapp.azure.com')
+RABBITMQ_PORT = int(os.environ.get('RABBITMQ_PORT', 30020)) 
 RABBITMQ_USER = os.environ.get('RABBITMQ_USER')
 RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
-EXCHANGE_NAME = 'log_monitoring'
-QUEUE_NAME = 'controlroom.log.events'
+RABBITMQ_EXCHANGE = 'log_monitoring'
+RABBITMQ_QUEUE = 'controlroom.log.events'
 ROUTING_KEY = 'controlroom.log.events'
+
+# Add environment variable check with detailed output
+def debug_print(message):
+    """Print debug messages with timestamp and special prefix."""
+    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    print(f"{timestamp} {DEBUG_PREFIX} {message}", file=sys.stderr)
+
+debug_print(f"Environment variables: RABBITMQ_HOST={RABBITMQ_HOST}, PORT={RABBITMQ_PORT}, USER={RABBITMQ_USER}, EXCHANGE={RABBITMQ_EXCHANGE}, QUEUE={RABBITMQ_QUEUE}")
+
+# Original print_only function enhanced with timestamp
+def print_only(message):
+    """Print a message without sending it to the logger to avoid recursion."""
+    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    print(f"{timestamp} {LOG_PREFIX} {message}", file=sys.stderr)
 
 # Log XSD Schema
 LOG_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -36,21 +56,16 @@ LOG_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
   </xs:element>
 </xs:schema>'''
 
-# Avoid infinite recursion in logging
-def print_only(message):
-    print(f"[RABBITMQ_LOGS] {message}")
-
 # Global log queue and thread
-log_queue = []
-queue_lock = threading.Lock()
+log_queue = queue.Queue()
 log_thread = None
 running = False
 log_schema = None
 
 try:
-    # Setup XML schema for validation
-    xsd_root = etree.parse(io.StringIO(LOG_XSD))
-    log_schema = etree.XMLSchema(xsd_root)
+    # Setup XML schema for validation - fix for Unicode encoding issue
+    xsd_doc = etree.fromstring(LOG_XSD.encode('utf-8'))
+    log_schema = etree.XMLSchema(xsd_doc)
     print_only("Loaded XML schema for log validation")
 except Exception as e:
     print_only(f"Error loading XML schema: {e}")
@@ -94,88 +109,103 @@ def send_log_to_queue(service_name, status, code, message):
     if "rabbitmq_logs" in service_name.lower():
         return
         
-    with queue_lock:
-        # Truncate message if too long
-        if message and len(message) > 2000:
-            message = message[:1997] + "..."
-            
-        log_queue.append({
-            "service_name": service_name,
-            "status": status,
-            "code": code,
-            "message": message,
-            "timestamp": datetime.datetime.now().isoformat()
-        })
-
-def log_sender_thread():
-    """Thread to send logs to RabbitMQ"""
-    global running
-    running = True
-    print_only("Log sender thread started")
+    # Truncate message if too long
+    if message and len(message) > 2000:
+        message = message[:1997] + "..."
+        
+    # Create XML message
+    xml_message = create_log_message(service_name, status, code, message)
     
-    while running:
-        try:
-            # Get messages from queue
-            messages_to_send = []
-            with queue_lock:
-                if log_queue:
-                    messages_to_send = log_queue.copy()
-                    log_queue.clear()
-            
-            # If there are messages, send them
-            if messages_to_send:
-                # Connect to RabbitMQ
+    # Optional validation
+    if not validate_xml(xml_message):
+        debug_print("Invalid XML log message generated, but will send anyway")
+    
+    # Add to queue
+    log_queue.put(xml_message)
+
+# Enhanced log sender thread with more debug output
+def log_sender_thread():
+    connection = None
+    channel = None
+    connected = False
+    reconnect_delay = 5  # seconds
+    
+    debug_print("Log sender thread initializing")
+    
+    while True:
+        # Connect to RabbitMQ if not connected
+        if not connected:
+            try:
+                debug_print(f"Attempting to connect to RabbitMQ at {RABBITMQ_HOST}:{RABBITMQ_PORT}...")
                 credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD)
-                connection = pika.BlockingConnection(
-                    pika.ConnectionParameters(
-                        host=RABBITMQ_HOST,
-                        port=RABBITMQ_PORT,
-                        credentials=credentials,
-                        heartbeat=60  # Higher heartbeat for stability
-                    )
+                parameters = pika.ConnectionParameters(
+                    host=RABBITMQ_HOST,
+                    port=RABBITMQ_PORT,
+                    credentials=credentials,
+                    heartbeat=600,
+                    blocked_connection_timeout=300
                 )
+                connection = pika.BlockingConnection(parameters)
                 channel = connection.channel()
                 
-                # Setup exchange and queue
-                channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type='direct', durable=True)
-                channel.queue_declare(queue=QUEUE_NAME, durable=True)
-                channel.queue_bind(exchange=EXCHANGE_NAME, queue=QUEUE_NAME, routing_key=ROUTING_KEY)
+                # Declare exchange and queue
+                debug_print(f"Setting up exchange '{RABBITMQ_EXCHANGE}' and queue '{RABBITMQ_QUEUE}'")
+                channel.exchange_declare(exchange=RABBITMQ_EXCHANGE, exchange_type='topic', durable=True)
+                channel.queue_declare(queue=RABBITMQ_QUEUE, durable=True)
+                channel.queue_bind(exchange=RABBITMQ_EXCHANGE, queue=RABBITMQ_QUEUE, routing_key='logs.events')
                 
-                # Send each message
-                for log_data in messages_to_send:
-                    xml_message = create_log_message(
-                        log_data["service_name"], 
-                        log_data["status"], 
-                        log_data["code"], 
-                        log_data["message"]
+                connected = True
+                debug_print("Successfully connected to RabbitMQ and set up channel")
+                print_only("Connected to RabbitMQ and ready to send logs")
+                reconnect_delay = 5  # Reset delay on successful connection
+            except Exception as e:
+                error_details = traceback.format_exc()
+                print_only(f"Failed to connect to RabbitMQ: {e}")
+                debug_print(f"Connection error details:\n{error_details}")
+                print_only(f"Will retry connection in {reconnect_delay} seconds")
+                time.sleep(reconnect_delay)
+                reconnect_delay = min(reconnect_delay * 2, 60)  # Exponential backoff with 60s max
+                continue
+
+        # Process log messages from queue
+        try:
+            # Try to get a message with a 1-second timeout
+            try:
+                log_message = log_queue.get(block=True, timeout=1.0)
+                debug_print(f"Processing log message: {log_message[:100]}..." if len(log_message) > 100 else log_message)
+                
+                # Publish message to RabbitMQ
+                channel.basic_publish(
+                    exchange=RABBITMQ_EXCHANGE,
+                    routing_key='logs.events',
+                    body=log_message,
+                    properties=pika.BasicProperties(
+                        delivery_mode=2,  # make message persistent
+                        content_type='application/xml'
                     )
-                    
-                    if validate_xml(xml_message):
-                        channel.basic_publish(
-                            exchange=EXCHANGE_NAME,
-                            routing_key=ROUTING_KEY,
-                            body=xml_message,
-                            properties=pika.BasicProperties(
-                                delivery_mode=2,  # Make message persistent
-                                content_type='application/xml'
-                            )
-                        )
-                        print_only(f"Log sent: {log_data['service_name']} - {log_data['code']}")
-                    else:
-                        print_only(f"Log validation failed: {log_data['message'][:50]}...")
+                )
+                debug_print("Log message successfully published to RabbitMQ")
+                log_queue.task_done()
+            except queue.Empty:
+                # No message in queue, just continue
+                pass
                 
-                # Close connection
-                connection.close()
+        except pika.exceptions.AMQPError as e:
+            print_only(f"RabbitMQ connection lost: {e}")
+            debug_print(f"AMQP error details: {type(e).__name__}: {str(e)}")
+            connected = False
             
-            # Sleep to avoid high CPU usage
-            time.sleep(1)
-            
+            # Close connection if it exists
+            try:
+                if connection and connection.is_open:
+                    connection.close()
+            except:
+                pass
+                
         except Exception as e:
-            print_only(f"Error in log sender thread: {str(e)}")
-            print_only(traceback.format_exc())
-            time.sleep(5)  # Wait before retry
-    
-    print_only("Log sender thread stopped")
+            error_details = traceback.format_exc()
+            print_only(f"Error in log sender thread: {e}")
+            debug_print(f"Unexpected error details:\n{error_details}")
 
 # Custom logging handler to capture Odoo logs
 class RabbitMQLogHandler(logging.Handler):
@@ -253,6 +283,10 @@ class RabbitMQLogStarter(models.AbstractModel):
     def _register_hook(self):
         """Start the logging integration when Odoo starts"""
         global log_thread
+        
+        print("=============================================")
+        print("RABBITMQ_LOGS REGISTER HOOK CALLED")
+        print("=============================================")
         
         print_only("Setting up RabbitMQ logging")
         
