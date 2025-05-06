@@ -196,7 +196,7 @@ class ResPartner(models.Model):
             return super(ResPartner, self).write(vals)
         
         # If this is a customer and we're adding customer_rank but there's no external_id, generate one
-        if vals.get('customer_rank', 0) > 0:
+        if vals.get('customer_rank', 0) >= 0:
             for record in self.filtered(lambda r: not r.external_id):
                 # Generate timestamp with microsecond precision for external_id
                 timestamp_id = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -212,7 +212,7 @@ class ResPartner(models.Model):
         
         for partner in self:
             # Skip if not a customer
-            if not partner.customer_rank > 0:
+            if not partner.customer_rank >= 0:
                 partners_to_skip.append(partner.id)
                 continue
                 

@@ -182,7 +182,7 @@ class ResPartner(models.Model):
         customers_to_delete = []
         
         for partner in self:
-            if partner.customer_rank > 0:  # Only process actual customers
+            if partner.customer_rank >= 0:  # Only process actual customers
                 customers_to_delete.append({
                     'id': partner.id,
                     'external_id': partner.external_id

@@ -1,0 +1,4 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_event_event,event.event,model_event_event,,1,1,1,1
+access_event_order,event.order,model_event_order,,1,1,1,1
+access_event_order_product,event.order.product,model_event_order_product,,1,1,1,1
