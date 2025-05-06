@@ -110,9 +110,9 @@ def send_log_to_queue(service_name, status, code, message):
         return
         
     # Track seen logs for monitoring
-    if hasattr(periodic_log_test, "seen_logs"):
-        log_key = f"{service_name}:{code}"
-        periodic_log_test.seen_logs.add(log_key)
+    # if hasattr(periodic_log_test, "seen_logs"):
+    #     log_key = f"{service_name}:{code}"
+    #     periodic_log_test.seen_logs.add(log_key)
     
     # Truncate message if too long
     if message and len(message) > 2000:
@@ -401,8 +401,8 @@ class RabbitMQLogService:
         ]:
             patch_module_log_function(module_path, function_name, service_name)
             
-        # Start periodic log tests
-        threading.Timer(5.0, periodic_log_test).start()
+        # # Start periodic log tests
+        # threading.Timer(5.0, periodic_log_test).start()
         
         return True
 
