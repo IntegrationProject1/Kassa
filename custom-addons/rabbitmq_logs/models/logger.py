@@ -329,39 +329,39 @@ class RabbitMQLogStarter(models.AbstractModel):
 
 # debug logs
 
-def periodic_log_test():
-    """Send a test log message periodically to verify the logging system is working"""
-    try:
-        # Create and send a test log
-        message = f"RabbitMQ Logging System Test Message - {datetime.datetime.now().isoformat()}"
-        send_log_to_queue("RABBITMQ_LOGS_TEST", "INFO", "PERIODIC_TEST", message)
-        debug_print("Sent periodic test log message")
+# def periodic_log_test():
+#     """Send a test log message periodically to verify the logging system is working"""
+#     try:
+#         # Create and send a test log
+#         message = f"RabbitMQ Logging System Test Message - {datetime.datetime.now().isoformat()}"
+#         send_log_to_queue("RABBITMQ_LOGS_TEST", "INFO", "PERIODIC_TEST", message)
+#         debug_print("Sent periodic test log message")
         
-        # Check if we've seen any logs from other modules
-        if hasattr(periodic_log_test, "seen_logs"):
-            elapsed = datetime.datetime.now() - periodic_log_test.last_check
-            if len(periodic_log_test.seen_logs) == periodic_log_test.previous_count and elapsed.total_seconds() > 60:
-                # No new logs seen for a minute, try manual patching
-                print_only("No new logs seen in 60 seconds, attempting to patch modules again")
-                for module_path, function_name, service_name in [
-                    ('odoo.addons.rabbitmq_heartbeat.models.heartbeat', 'log_message', 'HEARTBEAT'),
-                    ('odoo.addons.user_create.models.consumer_user_create', 'log_message', 'USER_CREATE'),
-                    ('odoo.addons.user_delete.models.rabbitmq_consumer', 'log_message', 'USER_DELETE'),
-                ]:
-                    patch_module_log_function(module_path, function_name, service_name)
+#         # Check if we've seen any logs from other modules
+#         if hasattr(periodic_log_test, "seen_logs"):
+#             elapsed = datetime.datetime.now() - periodic_log_test.last_check
+#             if len(periodic_log_test.seen_logs) == periodic_log_test.previous_count and elapsed.total_seconds() > 60:
+#                 # No new logs seen for a minute, try manual patching
+#                 print_only("No new logs seen in 60 seconds, attempting to patch modules again")
+#                 for module_path, function_name, service_name in [
+#                     ('odoo.addons.rabbitmq_heartbeat.models.heartbeat', 'log_message', 'HEARTBEAT'),
+#                     ('odoo.addons.user_create.models.consumer_user_create', 'log_message', 'USER_CREATE'),
+#                     ('odoo.addons.user_delete.models.rabbitmq_consumer', 'log_message', 'USER_DELETE'),
+#                 ]:
+#                     patch_module_log_function(module_path, function_name, service_name)
             
-            periodic_log_test.previous_count = len(periodic_log_test.seen_logs)
-            periodic_log_test.last_check = datetime.datetime.now()
-    except Exception as e:
-        print_only(f"Error in periodic test: {e}")
+#             periodic_log_test.previous_count = len(periodic_log_test.seen_logs)
+#             periodic_log_test.last_check = datetime.datetime.now()
+#     except Exception as e:
+#         print_only(f"Error in periodic test: {e}")
     
-    # Schedule next run in 20 seconds
-    threading.Timer(20.0, periodic_log_test).start()
+#     # Schedule next run in 20 seconds
+#     threading.Timer(20.0, periodic_log_test).start()
 
 # Initialize monitoring data
-periodic_log_test.seen_logs = set()
-periodic_log_test.previous_count = 0
-periodic_log_test.last_check = datetime.datetime.now()
+# periodic_log_test.seen_logs = set()
+# periodic_log_test.previous_count = 0
+# periodic_log_test.last_check = datetime.datetime.now()
 
 # Create class that can be imported and used from other modules
 class RabbitMQLogService:
@@ -407,5 +407,9 @@ class RabbitMQLogService:
         return True
 
 # Start the logging service automatically when module is loaded
-log_service = RabbitMQLogService()
-log_service.start_logging()
+def delayed_start():
+    time.sleep(3)  # Short delay to let Odoo start
+    log_service = RabbitMQLogService()
+    log_service.start_logging()
+
+threading.Thread(target=delayed_start, daemon=True).start()
