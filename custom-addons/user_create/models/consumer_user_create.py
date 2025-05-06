@@ -316,15 +316,39 @@ class CustomerCreateThread(threading.Thread):
             partner_model = env['res.partner'].sudo()
             
             customer_id = customer_data.get('customer_id')
-            log_message(f"Looking for customer with ID/email: {customer_id}")
+            email = customer_data.get('email_address')
+            log_message(f"Looking for customer with ID/email: {customer_id}, Email: {email}")
             
             if customer_data.get('action_type') == 'CREATE':
+                # Check if customer already exists with this external_id or email
+                existing_partner = False
+                
+                # First check by external_id (UUID)
+                if customer_id:
+                    existing_partner = partner_model.search([
+                        ('external_id', '=', customer_id)
+                    ], limit=1)
+                    
+                # If not found by external_id, check by email if available
+                if not existing_partner and email:
+                    existing_partner = partner_model.search([
+                        ('email', '=', email),
+                        ('email', '!=', False)
+                    ], limit=1)
+                    
+                # If partner already exists, log it and return success
+                if existing_partner:
+                    log_message(f"Customer already exists with ID: {existing_partner.id}, " 
+                               f"External ID: {existing_partner.external_id}, "
+                               f"Email: {existing_partner.email}. Skipping creation.")
+                    return True
+                    
                 log_message(f"Creating new customer with ID: {customer_id}")
                 
                 # Prepare values for creating a new customer (partner)
                 create_vals = {
                     'name': f"{customer_data.get('first_name', '')} {customer_data.get('last_name', '')}",
-                    'email': customer_data.get('email_address'),
+                    'email': email,
                     'phone': customer_data.get('phone_number'),
                     'customer_rank': 1,  # Set as customer
                     'external_id': customer_id,  # Store the UserID as external_id

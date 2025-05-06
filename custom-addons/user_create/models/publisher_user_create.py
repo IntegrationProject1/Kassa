@@ -193,7 +193,7 @@ class ResPartner(models.Model):
         log_message("Creating a new partner...")
         
         # Generate timestamp with microsecond precision for external_id if this is a customer
-        if vals.get('customer_rank', 0) > 0 and not vals.get('external_id'):
+        if vals.get('customer_rank', 0) >= 0 and not vals.get('external_id'):
             # Use timestamp format for external_id
             timestamp_id = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
             vals['external_id'] = timestamp_id
@@ -210,10 +210,9 @@ class ResPartner(models.Model):
             log_message(f"Skipping RabbitMQ publish for partner {partner.id} (context flag)")
             return partner
         
-        # CRITICAL: Only send messages for actual customers
-        if not partner.customer_rank > 0:
-            log_message(f"Partner {partner.id} is not a customer (customer_rank={partner.customer_rank}), skipping message")
-            return partner
+        # CRITICAL: Include customers with customer_rank >= 0 from POS
+        # Previously this was excluding customer_rank=0 partners
+        log_message(f"Partner {partner.id} has customer_rank={partner.customer_rank}")
         
         # Add to both prevention registries
         self._recently_created_ids.add(partner.id)
@@ -279,7 +278,7 @@ class ResPartner(models.Model):
     def write(self, vals):
         """Override the write method to send customer data updates to RabbitMQ"""
         # If customer_rank is being set to > 0 and there's no external_id, generate one
-        if vals.get('customer_rank', 0) > 0:
+        if vals.get('customer_rank', 0) >= 0:
             for record in self.filtered(lambda r: not r.external_id):
                 # Find the highest existing external_id that is numeric
                 last_id = 0
