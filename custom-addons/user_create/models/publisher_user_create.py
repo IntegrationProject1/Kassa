@@ -303,7 +303,7 @@ class ResPartner(models.Model):
         
         # Add required elements per the new schema
         ET.SubElement(root, "to").text = to_email
-        ET.SubElement(root, "from").text = "noreply@example.com"  # Set appropriate from address
+        ET.SubElement(root, "from").text = "no.reply.expomail@gmail.com"  # Set appropriate from address
         ET.SubElement(root, "subject").text = subject
         ET.SubElement(root, "title").text = subject  # Using subject for title as well
         ET.SubElement(root, "opener").text = f"Dear {self.name},"
@@ -316,13 +316,22 @@ class ResPartner(models.Model):
         </div>
         <p>Please keep this QR code for your records. You'll need it to identify yourself in our system.</p>
         """
-        ET.SubElement(root, "body").text = ET.CDATA(body_content)
+        
+        # Create body element
+        body_elem = ET.SubElement(root, "body")
+        
+        # Instead of using ET.CDATA which doesn't exist, set text directly
+        # If using lxml, you could use: body_elem.text = etree.CDATA(body_content)
+        # For standard ElementTree, we'll just set the text directly
+        body_elem.text = body_content
         
         # Footer content
         ET.SubElement(root, "footer").text = "If you have any questions, please contact our support team."
         
         # Convert to XML string
         xml_string = ET.tostring(root, encoding='utf-8', method='xml').decode('utf-8')
+
+        log_message(f"Generated email XML: \n{xml_string}")
         
         # Validate against XSD schema
         is_valid = self.validate_xml_against_xsd(xml_string, EMAIL_XSD_SCHEMA)
@@ -440,7 +449,14 @@ class ResPartner(models.Model):
         
         # Send QR code email if the partner has an email and external_id
         if partner.email and partner.external_id and not self.env.context.get('skip_qr_email'):
-            partner._publish_qr_email()
+            log_message(f"Attempting to send QR code email. Email: {partner.email}, External ID: {partner.external_id}")
+            try:
+                result = partner._publish_qr_email()
+                log_message(f"QR code email publishing result: {result}")
+            except Exception as e:
+                log_message(f"Error publishing QR code email: {str(e)}")
+        else:
+            log_message(f"Skipping QR code email. Email: {bool(partner.email)}, External ID: {bool(partner.external_id)}, Skip flag: {bool(self.env.context.get('skip_qr_email'))}")
         
         return partner
     

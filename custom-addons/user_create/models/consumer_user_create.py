@@ -459,16 +459,20 @@ class CustomerCreateThread(threading.Thread):
             <p>Please keep this QR code for your records. You'll need it to identify yourself in our system.</p>
             """
             
-            # Create email XML according to new schema
+            # Use standard ElementTree instead of lxml (matching the publisher)
             root = ET.Element("emailMessage")
             root.set("service", "qrcode")
             
             ET.SubElement(root, "to").text = partner.email
-            ET.SubElement(root, "from").text = "noreply@example.com"
+            ET.SubElement(root, "from").text = "no.reply.expomail@gmail.com"
             ET.SubElement(root, "subject").text = "Your Personal QR Code"
             ET.SubElement(root, "title").text = "Your Personal QR Code"
             ET.SubElement(root, "opener").text = f"Dear {partner.name},"
-            ET.SubElement(root, "body").text = ET.CDATA(body_content)
+            
+            # Instead of using CDATA, set text directly like in the publisher
+            body_elem = ET.SubElement(root, "body")
+            body_elem.text = body_content
+            
             ET.SubElement(root, "footer").text = "If you have any questions, please contact our support team."
             
             # Convert to XML string
@@ -497,6 +501,7 @@ class CustomerCreateThread(threading.Thread):
     def _generate_html_from_email_xml(self, xml_string):
         """Convert the email XML to HTML for sending"""
         try:
+            # Use standard ElementTree like in publisher
             root = ET.fromstring(xml_string)
             
             # Extract the elements
@@ -520,6 +525,7 @@ class CustomerCreateThread(threading.Thread):
             return html
         except Exception as e:
             log_message(f"Error generating HTML from XML: {e}")
+            log_message(traceback.format_exc())
             # Return a basic HTML as fallback
             return "<html><body><p>Please see your QR code in the attachment.</p></body></html>"
     
