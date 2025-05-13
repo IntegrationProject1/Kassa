@@ -49,13 +49,12 @@ def print_log(message):
     timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
     print(f"{timestamp} {LOG_PREFIX} {message}", file=sys.stderr)
 
-def create_log_message(service_name, status, code, message):
+def create_log_message(service_name, status, message):
     """Create XML log message"""
     root = ET.Element("Log")
     
     ET.SubElement(root, "ServiceName").text = service_name
     ET.SubElement(root, "Status").text = status
-    ET.SubElement(root, "Code").text = code
     ET.SubElement(root, "Message").text = message
     
     return ET.tostring(root, encoding="utf-8", method="xml").decode()
@@ -164,7 +163,7 @@ class RabbitMQLogHandler(logging.Handler):
     def emit(self, record):
         try:
             # Filter out certain loggers that generate too much noise
-            if record.name in ['werkzeug', 'odoo.http', 'odoo.sql_db']:
+            if record.name in ['werkzeug', 'odoo.http']:
                 return
             
             # Skip heartbeat-related logs to avoid duplication
