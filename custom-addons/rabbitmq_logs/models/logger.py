@@ -170,18 +170,15 @@ class RabbitMQLogHandler(logging.Handler):
                 
             # Format the log message
             message = self.format(record)
-            
+        
             # Determine status from log level
             if record.levelno >= logging.ERROR:
                 status = "ERROR"
             else:
                 status = "WARNING"
             
-            # Use module name as service name
-            if hasattr(record, 'module'):
-                service_name = f"ODOO_{record.module.upper()}"
-            else:
-                service_name = f"ODOO_{record.name.split('.')[-1].upper()}"
+            # Use the same service name as heartbeat: Odoo_POS
+            service_name = "Odoo_POS"
             
             # Generate code from logger name
             code = f"LOG_{record.name.replace('.', '_').upper()}"
