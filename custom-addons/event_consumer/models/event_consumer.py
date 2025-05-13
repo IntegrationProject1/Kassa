@@ -84,7 +84,6 @@ class EventCreateThread(threading.Thread):
                     host=RABBITMQ_HOST,
                     port=RABBITMQ_PORT,
                     credentials=credentials,
-                    heartbeat=600
                 ))
 
                 for queue in SERVICE_QUEUES:
