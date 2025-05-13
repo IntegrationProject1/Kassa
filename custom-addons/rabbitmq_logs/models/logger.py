@@ -160,11 +160,18 @@ def log_sender_thread():
             print_log(f"Error in log sender thread: {e}")
 
 class RabbitMQLogHandler(logging.Handler):
-    """Custom handler to send logs to RabbitMQ - only for ERRORS and system messages"""
+    """Custom handler to send logs to RabbitMQ - now captures INFO logs too"""
     def emit(self, record):
         try:
-            # Only process errors and warnings
-            if record.levelno < logging.WARNING:
+            # Filter out certain loggers that generate too much noise
+            if record.name in ['werkzeug', 'odoo.http', 'odoo.sql_db']:
+                return
+            
+            # Skip heartbeat-related logs to avoid duplication
+            if "HEARTBEAT" in record.name.upper() or \
+               (hasattr(record, 'msg') and isinstance(record.msg, str) and 
+                ("heartbeat" in record.msg.lower() or 
+                 "[HEARTBEAT_MODULE]" in record.msg)):
                 return
                 
             # Format the log message
@@ -173,14 +180,34 @@ class RabbitMQLogHandler(logging.Handler):
             # Determine status from log level
             if record.levelno >= logging.ERROR:
                 status = "ERROR"
-            else:
+            elif record.levelno >= logging.WARNING:
                 status = "WARNING"
+            else:
+                status = "INFO"
             
             # Use the same service name as heartbeat: Odoo_POS
             service_name = "Odoo_POS"
             
-            # Generate code from logger name
+            # Generate code from logger name and module identifier in the message
             code = f"LOG_{record.name.replace('.', '_').upper()}"
+            
+            # Look for module identifiers like [ORDER_MODULE], [CUSTOMER_CREATE_MODULE], etc.
+            if hasattr(record, 'msg') and isinstance(record.msg, str):
+                message_str = record.msg
+                module_tags = [
+                    "[ORDER_MODULE]", 
+                    "[CUSTOMER_CREATE_MODULE]",
+                    "[CUSTOMER_UPDATE_MODULE]",
+                    "[CUSTOMER_DELETE_MODULE]",
+                    "[USER_DELETE_MODULE]"
+                ]
+                
+                for tag in module_tags:
+                    if tag in message_str:
+                        # Override the code with a more specific one based on the module tag
+                        module_name = tag.strip('[]')
+                        code = module_name
+                        break
             
             # Send log to queue
             send_log_to_queue(service_name, status, code, message)
