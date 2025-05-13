@@ -84,7 +84,6 @@ class EventCreateThread(threading.Thread):
                     host=RABBITMQ_HOST,
                     port=RABBITMQ_PORT,
                     credentials=credentials,
-                    heartbeat=600
                 ))
 
                 for queue in SERVICE_QUEUES:
@@ -126,8 +125,6 @@ class EventCreateThread(threading.Thread):
                 log_message(f"XML validation failed:\n{error_details}")
                 raise ValueError("Invalid XML structure")
 
-
-
             uuid = xml.findtext('UUID')
             vals = {
                 'uuid': uuid,
@@ -139,6 +136,7 @@ class EventCreateThread(threading.Thread):
                 'organisator': xml.findtext('Organisator'),
                 'capacity': int(xml.findtext('Capacity')),
                 'event_type': xml.findtext('EventType'),
+                'is_invoiced': False,  # Standaard niet gefactureerd bij aanmaken
             }
 
             user_ids = []

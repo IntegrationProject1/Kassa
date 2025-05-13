@@ -1,0 +1,51 @@
+services:
+  db-test:
+    image: postgres:15
+    container_name: db_test
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - /data/postgres-test:/var/lib/postgresql/data
+    ports:
+      - "30061:5432"
+    networks:
+      - project_network_test
+    restart: always
+
+  odoo-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: odoo_test
+    env_file:
+      - .env
+    user: root
+    depends_on:
+      - db-test
+    ports:
+      - "30068:8069"
+    volumes:
+      - ./custom-addons:/mnt/extra-addons
+      - ./config:/etc/odoo
+      - odoo-web-data-test:/var/lib/odoo/web/static
+      - /data/odoo-data-test:/var/lib/odoo
+    environment:
+      - HOST=${ODOO_HOST}
+      - USER=${ODOO_USER}
+      - PASSWORD=${ODOO_PASSWORD}
+      - RABBITMQ_HOST=${RABBITMQ_HOST}
+      - RABBITMQ_USER=${RABBITMQ_USER}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
+    networks:
+      - project_network_test
+    restart: always
+
+volumes:
+  odoo-web-data-test:
+    driver: local
+
+networks:
+  project_network_test:
+    driver: bridge

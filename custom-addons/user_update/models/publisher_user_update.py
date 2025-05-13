@@ -196,7 +196,7 @@ class ResPartner(models.Model):
             return super(ResPartner, self).write(vals)
         
         # If this is a customer and we're adding customer_rank but there's no external_id, generate one
-        if vals.get('customer_rank', 0) > 0:
+        if vals.get('customer_rank', 0) >= 0:
             for record in self.filtered(lambda r: not r.external_id):
                 # Generate timestamp with microsecond precision for external_id
                 timestamp_id = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -212,7 +212,7 @@ class ResPartner(models.Model):
         
         for partner in self:
             # Skip if not a customer
-            if not partner.customer_rank > 0:
+            if not partner.customer_rank >= 0:
                 partners_to_skip.append(partner.id)
                 continue
                 
@@ -233,14 +233,19 @@ class ResPartner(models.Model):
             partners_to_update = self.env['res.partner'].browse(partners_to_process)
             
             for partner in partners_to_update:
-                # Generate timestamp with microsecond precision
-                uuid_timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                # Use existing external_id instead of generating a new timestamp
+                partner_uuid = partner.external_id
+                
+                # If external_id is not set, fallback to a timestamp
+                if not partner_uuid:
+                    partner_uuid = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                    log_message(f"Warning: No external_id found for partner {partner.id}, using timestamp instead")
                 
                 # Basic customer data
                 partner_data = {
                     'ActionType': 'UPDATE',
-                    'UUID': uuid_timestamp,  # Using timestamp with microsecond precision
-                    'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),  # Also using microsecond precision
+                    'UUID': partner_uuid,  # Using existing external_id
+                    'TimeOfAction': datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),  # Keeping microsecond precision for action time
                     'EncryptedPassword': 'odooadmin',  # Standard password as requested
                     'FirstName': partner.name.split(' ')[0] if partner.name else '',
                     'LastName': ' '.join(partner.name.split(' ')[1:]) if partner.name and ' ' in partner.name else '',

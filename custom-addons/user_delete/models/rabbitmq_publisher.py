@@ -71,17 +71,13 @@ class RabbitMQPublisher(models.AbstractModel):
         action_type = ET.SubElement(root, "ActionType")
         action_type.text = "DELETE"
         
-        # Use external_id directly if available, or generate new timestamp
-        uuid_value = None
-        if external_id:
-            # Check if external_id is already in timestamp format
-            if 'T' in external_id and '-' in external_id:
-                uuid_value = external_id
+        # Always use the provided external_id if available
+        uuid_value = external_id
         
-        # If no valid external_id, generate a new timestamp
+        # Only if external_id is not available, generate a timestamp as fallback
         if not uuid_value:
             uuid_value = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-            log_message(f"Generated new timestamp for UUID: {uuid_value}")
+            log_message(f"Warning: No external_id provided for customer {customer_id}, using timestamp instead: {uuid_value}")
         
         uuid_elem = ET.SubElement(root, "UUID")
         uuid_elem.text = uuid_value
@@ -186,7 +182,7 @@ class ResPartner(models.Model):
         customers_to_delete = []
         
         for partner in self:
-            if partner.customer_rank > 0:  # Only process actual customers
+            if partner.customer_rank >= 0:  # Only process actual customers
                 customers_to_delete.append({
                     'id': partner.id,
                     'external_id': partner.external_id
