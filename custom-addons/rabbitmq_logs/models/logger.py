@@ -59,7 +59,7 @@ def create_log_message(service_name, status, message):
     
     return ET.tostring(root, encoding="utf-8", method="xml").decode()
 
-def send_log_to_queue(service_name, status, code, message):
+def send_log_to_queue(service_name, status, message):
     """Add a log message to the queue"""
     # Skip logs from the logger module itself to prevent recursion
     if "rabbitmq_logs" in service_name.lower():
@@ -69,8 +69,8 @@ def send_log_to_queue(service_name, status, code, message):
     if message and len(message) > 2000:
         message = message[:1997] + "..."
         
-    # Create XML message and add to queue
-    xml_message = create_log_message(service_name, status, code, message)
+    # Create XML message and add to queue - ignore the code parameter
+    xml_message = create_log_message(service_name, status, message)
     log_queue.put(xml_message)
 
 def log_sender_thread():
@@ -187,9 +187,6 @@ class RabbitMQLogHandler(logging.Handler):
             # Use the same service name as heartbeat: Odoo_POS
             service_name = "Odoo_POS"
             
-            # Generate code from logger name and module identifier in the message
-            code = f"LOG_{record.name.replace('.', '_').upper()}"
-            
             # Look for module identifiers like [ORDER_MODULE], [CUSTOMER_CREATE_MODULE], etc.
             if hasattr(record, 'msg') and isinstance(record.msg, str):
                 message_str = record.msg
@@ -205,11 +202,10 @@ class RabbitMQLogHandler(logging.Handler):
                     if tag in message_str:
                         # Override the code with a more specific one based on the module tag
                         module_name = tag.strip('[]')
-                        code = module_name
                         break
             
             # Send log to queue
-            send_log_to_queue(service_name, status, code, message)
+            send_log_to_queue(service_name, status, message)
             
         except Exception as e:
             print(f"Error in RabbitMQ log handler: {e}")
