@@ -21,7 +21,7 @@ RABBITMQ_PORT = int(os.environ.get('RABBITMQ_PORT', 30020))
 RABBITMQ_USER = os.environ.get('RABBITMQ_USER')
 RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
 RABBITMQ_EXCHANGE = 'log_monitoring'
-RABBITMQ_QUEUE = 'controlroom.log.events'
+RABBITMQ_QUEUE = 'controlroom.log.event'
 
 # XML Schema
 LOG_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -96,7 +96,7 @@ def log_sender_thread():
                 # Declare exchange and queue
                 channel.exchange_declare(exchange=RABBITMQ_EXCHANGE, exchange_type='direct', durable=True)
                 channel.queue_declare(queue=RABBITMQ_QUEUE, durable=True)
-                channel.queue_bind(exchange=RABBITMQ_EXCHANGE, queue=RABBITMQ_QUEUE, routing_key='logs.events')
+                channel.queue_bind(exchange=RABBITMQ_EXCHANGE, queue=RABBITMQ_QUEUE, routing_key='controlroom.log.event')
                 
                 connected = True
                 print_log("Connected to RabbitMQ logger service")
