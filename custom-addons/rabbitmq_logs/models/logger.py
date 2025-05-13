@@ -33,7 +33,6 @@ LOG_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
       <xs:sequence>
         <xs:element name="ServiceName" type="xs:string"/>
         <xs:element name="Status" type="xs:string"/>
-        <xs:element name="Code" type="xs:string"/>
         <xs:element name="Message" type="xs:string"/>
       </xs:sequence>
     </xs:complexType>
