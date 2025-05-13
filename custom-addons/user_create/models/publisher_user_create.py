@@ -301,6 +301,9 @@ class ResPartner(models.Model):
         root = ET.Element("emailMessage")
         root.set("service", "qrcode")  # Add service attribute
         
+        # Create QR code identifier
+        qr_data = f"042{self.external_id}"
+        
         # Add required elements per the new schema
         ET.SubElement(root, "to").text = to_email
         ET.SubElement(root, "from").text = "no.reply.expomail@gmail.com"  # Set appropriate from address
@@ -308,22 +311,9 @@ class ResPartner(models.Model):
         ET.SubElement(root, "title").text = subject  # Using subject for title as well
         ET.SubElement(root, "opener").text = f"Dear {self.name},"
         
-        # Body contains the QR code
-        body_content = f"""
-        <p>Thank you for registering. Below is your personal QR code:</p>
-        <div style="text-align: center; margin: 20px 0;">
-            <img src="data:image/png;base64,{self._generate_qr_code_base64()}" alt="QR Code" style="width: 250px; height: 250px;"/>
-        </div>
-        <p>Please keep this QR code for your records. You'll need it to identify yourself in our system.</p>
-        """
-        
-        # Create body element
+        # Create body element first, then set its text
         body_elem = ET.SubElement(root, "body")
-        
-        # Instead of using ET.CDATA which doesn't exist, set text directly
-        # If using lxml, you could use: body_elem.text = etree.CDATA(body_content)
-        # For standard ElementTree, we'll just set the text directly
-        body_elem.text = body_content
+        body_elem.text = qr_data  # Just send the QR identifier
         
         # Footer content
         ET.SubElement(root, "footer").text = "If you have any questions, please contact our support team."
@@ -339,27 +329,6 @@ class ResPartner(models.Model):
             log_message("Generated email XML does not conform to XSD schema")
         
         return xml_string
-
-    def _generate_qr_code_base64(self):
-        """Generate QR code and return as base64 string"""
-        # Create QR code with prefix + external_id
-        qr_data = f"042{self.external_id}"
-        
-        # Generate QR code image
-        qr = qrcode.QRCode(
-            version=1,
-            error_correction=qrcode.constants.ERROR_CORRECT_L,
-            box_size=10,
-            border=4,
-        )
-        qr.add_data(qr_data)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white")
-        
-        # Convert to base64
-        buffered = io.BytesIO()
-        img.save(buffered)
-        return base64.b64encode(buffered.getvalue()).decode()
 
     @api.model
     def create(self, vals):

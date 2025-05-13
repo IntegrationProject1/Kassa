@@ -431,48 +431,25 @@ class CustomerCreateThread(threading.Thread):
                 
             log_message(f"Generating QR code email for partner {partner.id} with external_id {partner.external_id}")
             
-            # Generate QR code with prefix + external_id
+            # Create QR code identifier
             qr_data = f"042{partner.external_id}"
-            
-            # Create QR code image
-            qr = qrcode.QRCode(
-                version=1,
-                error_correction=qrcode.constants.ERROR_CORRECT_L,
-                box_size=10,
-                border=4,
-            )
-            qr.add_data(qr_data)
-            qr.make(fit=True)
-            img = qr.make_image(fill_color="black", back_color="white")
-            
-            # Convert to base64
-            buffered = io.BytesIO()
-            img.save(buffered)
-            img_base64 = base64.b64encode(buffered.getvalue()).decode()
-            
-            # Create body content with QR code
-            body_content = f"""
-            <p>Thank you for registering. Below is your personal QR code:</p>
-            <div style="text-align: center; margin: 20px 0;">
-                <img src="data:image/png;base64,{img_base64}" alt="QR Code" style="width: 250px; height: 250px;"/>
-            </div>
-            <p>Please keep this QR code for your records. You'll need it to identify yourself in our system.</p>
-            """
             
             # Use standard ElementTree instead of lxml (matching the publisher)
             root = ET.Element("emailMessage")
             root.set("service", "qrcode")
             
+            # Add required elements per the schema
             ET.SubElement(root, "to").text = partner.email
             ET.SubElement(root, "from").text = "no.reply.expomail@gmail.com"
             ET.SubElement(root, "subject").text = "Your Personal QR Code"
             ET.SubElement(root, "title").text = "Your Personal QR Code"
             ET.SubElement(root, "opener").text = f"Dear {partner.name},"
             
-            # Instead of using CDATA, set text directly like in the publisher
+            # Create body element first, then set its text - exactly like the publisher
             body_elem = ET.SubElement(root, "body")
-            body_elem.text = body_content
+            body_elem.text = qr_data  # Just send the QR identifier
             
+            # Footer content
             ET.SubElement(root, "footer").text = "If you have any questions, please contact our support team."
             
             # Convert to XML string
@@ -483,7 +460,7 @@ class CustomerCreateThread(threading.Thread):
                 'subject': 'Your Personal QR Code',
                 'body_html': self._generate_html_from_email_xml(xml_string),
                 'email_to': partner.email,
-                'email_from': "noreply@example.com",
+                'email_from': "no.reply.expomail@gmail.com",
                 'auto_delete': True,
             })
             
