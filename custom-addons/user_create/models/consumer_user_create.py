@@ -10,6 +10,8 @@ from odoo import models, api, fields, _
 from odoo.exceptions import UserError
 from lxml import etree
 import base64
+import qrcode
+import io
 
 _logger = logging.getLogger(__name__)
 
@@ -57,6 +59,24 @@ XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
             </xs:sequence>
         </xs:complexType>
     </xs:element>
+</xs:schema>'''
+
+EMAIL_XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="emailMessage">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="to" type="xs:string"/>
+        <xs:element name="from" type="xs:string"/>
+        <xs:element name="subject" type="xs:string"/>
+        <xs:element name="title" type="xs:string"/>
+        <xs:element name="opener" type="xs:string"/>
+        <xs:element name="body" type="xs:string"/>
+        <xs:element name="footer" type="xs:string"/>
+      </xs:sequence>
+      <xs:attribute name="service" type="xs:string" use="required"/>
+    </xs:complexType>
+  </xs:element>
 </xs:schema>'''
 
 class CustomerCreateThread(threading.Thread):
@@ -373,6 +393,12 @@ class CustomerCreateThread(threading.Thread):
                     # Add special context flag to prevent publishing
                     new_customer = partner_model.with_context(skip_rabbitmq_publish=True).create(create_vals)
                     log_message(f"Created new customer: {new_customer.id}, Name: {new_customer.name}")
+                    
+                    # Send QR code email if customer has email and external_id
+                    if new_customer.email and new_customer.external_id:
+                        log_message(f"Sending QR code email to new customer: {new_customer.email}")
+                        self._send_qr_email(new_customer, env)
+                    
                     return True
                 except Exception as create_error:
                     log_message(f"Error creating customer: {str(create_error)}")
@@ -395,6 +421,107 @@ class CustomerCreateThread(threading.Thread):
             log_message(f"Unexpected error processing customer data: {str(e)}")
             log_message(traceback.format_exc())
             return False
+    
+    def _send_qr_email(self, partner, env):
+        """Send QR code email to partner using the new email schema"""
+        try:
+            if not partner.email or not partner.external_id:
+                log_message(f"Cannot send QR email - missing email or external_id for partner {partner.id}")
+                return False
+                
+            log_message(f"Generating QR code email for partner {partner.id} with external_id {partner.external_id}")
+            
+            # Generate QR code with prefix + external_id
+            qr_data = f"042{partner.external_id}"
+            
+            # Create QR code image
+            qr = qrcode.QRCode(
+                version=1,
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=10,
+                border=4,
+            )
+            qr.add_data(qr_data)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            
+            # Convert to base64
+            buffered = io.BytesIO()
+            img.save(buffered)
+            img_base64 = base64.b64encode(buffered.getvalue()).decode()
+            
+            # Create body content with QR code
+            body_content = f"""
+            <p>Thank you for registering. Below is your personal QR code:</p>
+            <div style="text-align: center; margin: 20px 0;">
+                <img src="data:image/png;base64,{img_base64}" alt="QR Code" style="width: 250px; height: 250px;"/>
+            </div>
+            <p>Please keep this QR code for your records. You'll need it to identify yourself in our system.</p>
+            """
+            
+            # Create email XML according to new schema
+            root = ET.Element("emailMessage")
+            root.set("service", "qrcode")
+            
+            ET.SubElement(root, "to").text = partner.email
+            ET.SubElement(root, "from").text = "noreply@example.com"
+            ET.SubElement(root, "subject").text = "Your Personal QR Code"
+            ET.SubElement(root, "title").text = "Your Personal QR Code"
+            ET.SubElement(root, "opener").text = f"Dear {partner.name},"
+            ET.SubElement(root, "body").text = ET.CDATA(body_content)
+            ET.SubElement(root, "footer").text = "If you have any questions, please contact our support team."
+            
+            # Convert to XML string
+            xml_string = ET.tostring(root, encoding='utf-8', method='xml').decode('utf-8')
+            
+            # Send email directly using Odoo's mail API
+            mail_template = env['mail.mail'].sudo().create({
+                'subject': 'Your Personal QR Code',
+                'body_html': self._generate_html_from_email_xml(xml_string),
+                'email_to': partner.email,
+                'email_from': "noreply@example.com",
+                'auto_delete': True,
+            })
+            
+            # Send the email immediately
+            mail_template.send()
+            
+            log_message(f"QR code email for {partner.name} ({partner.email}) sent successfully")
+            return True
+            
+        except Exception as e:
+            log_message(f"Error sending QR code email: {str(e)}")
+            log_message(traceback.format_exc())
+            return False
+
+    def _generate_html_from_email_xml(self, xml_string):
+        """Convert the email XML to HTML for sending"""
+        try:
+            root = ET.fromstring(xml_string)
+            
+            # Extract the elements
+            title = root.find("title").text
+            opener = root.find("opener").text
+            body = root.find("body").text
+            footer = root.find("footer").text
+            
+            # Construct HTML
+            html = f"""
+            <html>
+                <body>
+                    <h1>{title}</h1>
+                    <p>{opener}</p>
+                    {body}
+                    <hr/>
+                    <p>{footer}</p>
+                </body>
+            </html>
+            """
+            return html
+        except Exception as e:
+            log_message(f"Error generating HTML from XML: {e}")
+            # Return a basic HTML as fallback
+            return "<html><body><p>Please see your QR code in the attachment.</p></body></html>"
     
     def stop(self):
         """Stop the thread cleanly"""

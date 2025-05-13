@@ -5,6 +5,9 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from odoo import models, api, fields
 from lxml import etree
+import qrcode
+import io
+import base64
 
 _logger = logging.getLogger(__name__)
 
@@ -51,6 +54,25 @@ USER_CREATE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
         </xs:complexType>
     </xs:element>
 </xs:schema>'''
+
+EMAIL_XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="emailMessage">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="to" type="xs:string"/>
+        <xs:element name="from" type="xs:string"/>
+        <xs:element name="subject" type="xs:string"/>
+        <xs:element name="title" type="xs:string"/>
+        <xs:element name="opener" type="xs:string"/>
+        <xs:element name="body" type="xs:string"/>
+        <xs:element name="footer" type="xs:string"/>
+      </xs:sequence>
+      <xs:attribute name="service" type="xs:string" use="required"/>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>
+'''
 
 def log_message(message):
     """Standard logging function"""
@@ -187,6 +209,149 @@ class ResPartner(models.Model):
             log_message(f"Failed to publish customer create message: {e}")
             return False
     
+    def _publish_qr_email(self):
+        """Generate and publish QR code email for user"""
+        self.ensure_one()
+        
+        # Skip if no email or external_id
+        if not self.email or not self.external_id:
+            log_message(f"Skipping QR email for partner {self.id} - missing email or external_id")
+            return False
+        
+        try:
+            log_message(f"Generating QR code email for partner {self.id} with external_id {self.external_id}")
+            
+            # Create HTML content with QR code
+            html_content = self._generate_qr_email_html()
+            
+            # Create XML message
+            xml_message = self._create_email_xml_message(self.email, "Your Personal QR Code", html_content)
+            
+            # Publish to RabbitMQ
+            connection = pika.BlockingConnection(self._get_rabbitmq_connection_params())
+            channel = connection.channel()
+            
+            # Declare the queue
+            queue_name = "mail_queue"
+            channel.queue_declare(queue=queue_name, durable=True)
+            
+            # Publish message
+            channel.basic_publish(
+                exchange='',
+                routing_key=queue_name,
+                body=xml_message,
+                properties=pika.BasicProperties(
+                    delivery_mode=2,  # Make message persistent
+                    content_type='application/xml'
+                )
+            )
+            
+            connection.close()
+            log_message(f"QR code email for {self.name} ({self.email}) published to mail_queue")
+            return True
+            
+        except Exception as e:
+            log_message(f"Error sending QR code email: {e}")
+            return False
+
+    def _generate_qr_email_html(self):
+        """Generate HTML email with QR code (deprecated - using new XML format)"""
+        # This method is kept for backwards compatibility
+        # The QR code generation is now handled in _generate_qr_code_base64
+        
+        # Create QR code with prefix + external_id
+        qr_data = f"042{self.external_id}"
+        
+        # Generate QR code image
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(qr_data)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        
+        # Convert to base64
+        buffered = io.BytesIO()
+        img.save(buffered)
+        img_base64 = base64.b64encode(buffered.getvalue()).decode()
+        
+        # Create HTML email content
+        html_content = f"""
+        <html>
+            <body>
+                <h1>Your Personal QR Code</h1>
+                <p>Dear {self.name},</p>
+                <p>Thank you for registering. Below is your personal QR code:</p>
+                <div style="text-align: center; margin: 20px 0;">
+                    <img src="data:image/png;base64,{img_base64}" alt="QR Code" style="width: 250px; height: 250px;"/>
+                </div>
+                <p>Please keep this QR code for your records. You'll need it to identify yourself in our system.</p>
+                <hr/>
+                <p>If you have any questions, please contact our support team.</p>
+            </body>
+        </html>
+        """
+        return html_content
+
+    def _create_email_xml_message(self, to_email, subject, html_content):
+        """Create XML message for email using the new schema"""
+        root = ET.Element("emailMessage")
+        root.set("service", "qrcode")  # Add service attribute
+        
+        # Add required elements per the new schema
+        ET.SubElement(root, "to").text = to_email
+        ET.SubElement(root, "from").text = "noreply@example.com"  # Set appropriate from address
+        ET.SubElement(root, "subject").text = subject
+        ET.SubElement(root, "title").text = subject  # Using subject for title as well
+        ET.SubElement(root, "opener").text = f"Dear {self.name},"
+        
+        # Body contains the QR code
+        body_content = f"""
+        <p>Thank you for registering. Below is your personal QR code:</p>
+        <div style="text-align: center; margin: 20px 0;">
+            <img src="data:image/png;base64,{self._generate_qr_code_base64()}" alt="QR Code" style="width: 250px; height: 250px;"/>
+        </div>
+        <p>Please keep this QR code for your records. You'll need it to identify yourself in our system.</p>
+        """
+        ET.SubElement(root, "body").text = ET.CDATA(body_content)
+        
+        # Footer content
+        ET.SubElement(root, "footer").text = "If you have any questions, please contact our support team."
+        
+        # Convert to XML string
+        xml_string = ET.tostring(root, encoding='utf-8', method='xml').decode('utf-8')
+        
+        # Validate against XSD schema
+        is_valid = self.validate_xml_against_xsd(xml_string, EMAIL_XSD_SCHEMA)
+        if not is_valid:
+            log_message("Generated email XML does not conform to XSD schema")
+        
+        return xml_string
+
+    def _generate_qr_code_base64(self):
+        """Generate QR code and return as base64 string"""
+        # Create QR code with prefix + external_id
+        qr_data = f"042{self.external_id}"
+        
+        # Generate QR code image
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(qr_data)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        
+        # Convert to base64
+        buffered = io.BytesIO()
+        img.save(buffered)
+        return base64.b64encode(buffered.getvalue()).decode()
+
     @api.model
     def create(self, vals):
         """Override the create method to send customer data to RabbitMQ."""
@@ -273,6 +438,10 @@ class ResPartner(models.Model):
         except Exception as e:
             log_message(f"Error preparing or sending customer create message: {e}")
         
+        # Send QR code email if the partner has an email and external_id
+        if partner.email and partner.external_id and not self.env.context.get('skip_qr_email'):
+            partner._publish_qr_email()
+        
         return partner
     
     def write(self, vals):
@@ -297,5 +466,10 @@ class ResPartner(models.Model):
                     log_message(f"Generated new external_id on update: {vals['external_id']}")
 
         result = super(ResPartner, self).write(vals)
-        # Rest of your existing write method code...
+        
+        # Send QR code email to partners who just got an external_id
+        for record in self:
+            if record.email and record.external_id and 'external_id' in vals and not self.env.context.get('skip_qr_email'):
+                record._publish_qr_email()
+        
         return result
