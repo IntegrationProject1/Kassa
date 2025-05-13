@@ -206,7 +206,7 @@ class RabbitMQLogStarter(models.AbstractModel):
         handler = RabbitMQLogHandler()
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         handler.setFormatter(formatter)
-        handler.setLevel(logging.WARNING)  # Only WARNING and ERROR
+        handler.setLevel(logging.INFO)  # Changed from WARNING to INFO
         logging.getLogger().addHandler(handler)
         
         return super(RabbitMQLogStarter, self)._register_hook()
@@ -219,7 +219,7 @@ def delayed_start():
     handler = RabbitMQLogHandler()
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
-    handler.setLevel(logging.WARNING)  # Only WARNING and ERROR
+    handler.setLevel(logging.INFO)  # Changed from WARNING to INFO
     logging.getLogger().addHandler(handler)
     
     # Start thread
@@ -230,3 +230,55 @@ def delayed_start():
 
 # Start automatically
 threading.Thread(target=delayed_start, daemon=True).start()
+
+def log_customer_event(action, customer_name, customer_id, external_id=None):
+    """Log customer creation/update/deletion events"""
+    details = f"{customer_name} (ID: {customer_id}"
+    if external_id:
+        details += f", External ID: {external_id}"
+    details += ")"
+    
+    send_log_to_queue(
+        "Odoo_POS",
+        "INFO",
+        f"CUSTOMER_{action.upper()}",
+        f"Customer {action}: {details}"
+    )
+
+def log_order_event(action, order_id, partner_name=None, product_count=None):
+    """Log POS order events"""
+    details = f"Order {order_id}"
+    if partner_name:
+        details += f" for {partner_name}"
+    if product_count:
+        details += f" with {product_count} product(s)"
+    
+    send_log_to_queue(
+        "Odoo_POS",
+        "INFO",
+        f"ORDER_{action.upper()}",
+        f"Order {action}: {details}"
+    )
+
+def log_event_event(action, event_name, event_id, uuid=None):
+    """Log event creation/update/deletion"""
+    details = f"{event_name} (ID: {event_id}"
+    if uuid:
+        details += f", UUID: {uuid}"
+    details += ")"
+    
+    send_log_to_queue(
+        "Odoo_POS",
+        "INFO",
+        f"EVENT_{action.upper()}",
+        f"Event {action}: {details}"
+    )
+
+def log_billing_event(event_name, event_id, user_count):
+    """Log event billing operations"""
+    send_log_to_queue(
+        "Odoo_POS",
+        "INFO",
+        "EVENT_BILLING",
+        f"Event billing completed for {event_name} (ID: {event_id}): {user_count} users processed"
+    )
