@@ -42,7 +42,6 @@ EVENT_CREATE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
                 <xs:complexType>
                   <xs:sequence>
                     <xs:element name="UUID" type="xs:dateTime"/>
-                    <xs:element name="Name" type="xs:string"/>
                   </xs:sequence>
                 </xs:complexType>
               </xs:element>

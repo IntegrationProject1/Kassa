@@ -1,5 +1,5 @@
 {
-    'name': 'Event create consumer rabbitmq',
+    'name': 'Event delete consumer rabbitmq',
     'version': '1.0',
     'depends': ['base', 'event_adder'], 
     'author': 'Jorn De Smet',
