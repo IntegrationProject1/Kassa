@@ -23,7 +23,7 @@ EVENT_CREATE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
            elementFormDefault="qualified">
 
-  <xs:element name="Event">
+  <xs:element name="CreateEvent">
     <xs:complexType>
       <xs:sequence>
         <xs:element name="UUID" type="xs:dateTime"/>
@@ -42,7 +42,6 @@ EVENT_CREATE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
                 <xs:complexType>
                   <xs:sequence>
                     <xs:element name="UUID" type="xs:dateTime"/>
-                    <xs:element name="Name" type="xs:string"/>
                   </xs:sequence>
                 </xs:complexType>
               </xs:element>
@@ -67,6 +66,19 @@ def _format_uuid(raw_uuid):
         return dt.isoformat(sep=' ')
     except Exception:
         return raw_uuid
+    
+
+def _validate_iso8601_zulu(value, field_name):
+    try:
+        datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")
+    except ValueError:
+        try:
+            datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            log_message(f"Invalid {field_name}: '{value}' — must be in ISO 8601 format like 2025-05-06T14:00:00Z")
+            return False
+    return True
+
 
 class EventCreateThread(threading.Thread):
     def __init__(self, env):
@@ -119,24 +131,37 @@ class EventCreateThread(threading.Thread):
             env = api.Environment(new_cr, self.env.uid, self.env.context)
             xml_str = body.decode('utf-8')
             xml = etree.fromstring(xml_str.encode())
+
             schema = etree.XMLSchema(etree.fromstring(EVENT_CREATE_XSD.encode()))
             if not schema.validate(xml):
                 error_details = "\n".join([f"Line {e.line}: {e.message}" for e in schema.error_log])
                 log_message(f"XML validation failed:\n{error_details}")
-                raise ValueError("Invalid XML structure")
+                return
 
             uuid = xml.findtext('UUID')
+            start_datetime = xml.findtext('StartDateTime')
+            end_datetime = xml.findtext('EndDateTime')
+
+            # Validate formats
+            if not all([
+                _validate_iso8601_zulu(uuid, "UUID"),
+                _validate_iso8601_zulu(start_datetime, "StartDateTime"),
+                _validate_iso8601_zulu(end_datetime, "EndDateTime"),
+            ]):
+                log_message("Aborting message processing due to invalid datetime format.")
+                return
+
             vals = {
                 'uuid': uuid,
                 'name': xml.findtext('Name'),
                 'description': xml.findtext('Description'),
-                'start_datetime': xml.findtext('StartDateTime'),
-                'end_datetime': xml.findtext('EndDateTime'),
+                'start_datetime': start_datetime,
+                'end_datetime': end_datetime,
                 'location': xml.findtext('Location'),
                 'organisator': xml.findtext('Organisator'),
                 'capacity': int(xml.findtext('Capacity')),
                 'event_type': xml.findtext('EventType'),
-                'is_invoiced': False,  # Standaard niet gefactureerd bij aanmaken
+                'is_invoiced': False,
             }
 
             user_ids = []
@@ -152,6 +177,7 @@ class EventCreateThread(threading.Thread):
 
             env['event.event'].create(vals)
             log_message(f"Created event with UUID: {uuid}")
+
 
 # Global thread instance
 event_create_thread = None
