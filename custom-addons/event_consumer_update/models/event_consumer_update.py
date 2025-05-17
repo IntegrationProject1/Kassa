@@ -9,6 +9,7 @@ import os
 from datetime import datetime
 from odoo import models, api
 from lxml import etree
+import json
 
 _logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ UPDATE_QUEUE = 'event.updated'
 UPDATE_EVENT_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
            elementFormDefault="qualified">
-    <xs:element name="UpdateSession">
+    <xs:element name="UpdateEvent">
         <xs:complexType>
             <xs:sequence>
                 <xs:element name="UUID" type="xs:dateTime"/>
@@ -115,8 +116,20 @@ class EventUpdateThread(threading.Thread):
             for field in xml.find('FieldsToUpdate').findall('Field'):
                 field_name = field.findtext('Name')
                 new_value = field.findtext('NewValue')
-                updates[field_name] = new_value
-                log_message(f"Field to update: {field_name} -> {new_value}")
+
+                if field_name == 'registered_user_ids':
+                    try:
+                        external_uuids = json.loads(new_value)
+                        partners = env['res.partner'].search([('external_id', 'in', external_uuids)])
+                        if not partners:
+                            raise ValueError(f"No matching res.partner records for UUIDs: {external_uuids}")
+                        updates[field_name] = [(6, 0, partners.ids)]  # REPLACE all with new set
+                        log_message(f"Setting registered_user_ids to partner IDs: {partners.ids}")
+                    except Exception as e:
+                        raise ValueError(f"Invalid format for registered_user_ids: {e}")
+                else:
+                    updates[field_name] = new_value
+                    log_message(f"Field to update: {field_name} -> {new_value}")
 
             event.write(updates)
             log_message(f"Successfully updated event with UUID: {uuid}")
