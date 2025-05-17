@@ -374,6 +374,20 @@ class CustomerCreateThread(threading.Thread):
                     'external_id': customer_id,  # Store the UserID as external_id
                 }
                 
+                # Assign external_id if not already provided
+                external_id = create_vals.get('external_id')
+                
+                # Generate the barcode using external_id with '042' prefix
+                if external_id:
+                    barcode = f"042{external_id.replace('-', '')}"
+                    
+                    # Check if the barcode is already in use
+                    if partner_model.search_count([('barcode', '=', barcode)]):
+                        log_message(f"Barcode {barcode} already exists for another partner.")
+                    else:
+                        create_vals['barcode'] = barcode
+                        log_message(f"Generated unique barcode for customer: {barcode}")
+                
                 # Add company details if available
                 if 'business' in customer_data:
                     business = customer_data.get('business')

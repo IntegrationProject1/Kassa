@@ -309,7 +309,7 @@ class ResPartner(models.Model):
         ET.SubElement(root, "from").text = "no.reply.expomail@gmail.com"  # Set appropriate from address
         ET.SubElement(root, "subject").text = subject
         ET.SubElement(root, "title").text = subject  # Using subject for title as well
-        ET.SubElement(root, "opener").text = f"Dear {self.name},"
+        ET.SubElement(root, "opener").text = f"Dear {self.name}, thank you for registering. Below is your personal QR code."
         
         # Create body element first, then set its text
         body_elem = ET.SubElement(root, "body")
@@ -341,6 +341,19 @@ class ResPartner(models.Model):
             timestamp_id = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
             vals['external_id'] = timestamp_id
             log_message(f"Generated new timestamp-based external_id: {timestamp_id}")
+
+        # Assign external_id if not already provided
+        external_id = vals.get('external_id')
+
+        # Generate the barcode using external_id with '042' prefix
+        barcode = f"042{external_id.replace('-', '')}"
+
+        # Check if the barcode is already in use
+        if self.env['res.partner'].search_count([('barcode', '=', barcode)]):
+            _logger.warning(f"Barcode {barcode} already exists for another partner.")
+        else:
+            vals['barcode'] = barcode
+            _logger.info(f"Generated unique barcode for customer: {barcode}")
         
         # Set context flags for write operations to prevent duplicate messages
         ctx = dict(self.env.context, creating_new_partner=True, skip_rabbitmq_publish=True)
