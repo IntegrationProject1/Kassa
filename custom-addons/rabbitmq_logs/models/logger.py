@@ -219,31 +219,40 @@ class RabbitMQLogStarter(models.AbstractModel):
         """Start the logging integration when Odoo starts"""
         global log_thread
         
-        # Start log sender thread if not running
+        # Start send‐thread if needed
         if log_thread is None or not log_thread.is_alive():
             log_thread = threading.Thread(target=log_sender_thread, daemon=True)
             log_thread.start()
         
-        # Add log handler to root logger for errors only
+        # Create & configure handler
         handler = RabbitMQLogHandler()
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
         handler.setFormatter(formatter)
-        handler.setLevel(logging.INFO)  # Changed from WARNING to INFO
-        logging.getLogger().addHandler(handler)
+        handler.setLevel(logging.INFO)
+        
+        # *** Ensure the root logger will emit INFO ***
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.INFO)
+        root_logger.addHandler(handler)
         
         return super(RabbitMQLogStarter, self)._register_hook()
 
 # Start the logging system automatically with a delay
 def delayed_start():
     time.sleep(3)  # Give Odoo time to start
-    
-    # Add log handler to root logger
+
     handler = RabbitMQLogHandler()
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
-    handler.setLevel(logging.INFO)  # Changed from WARNING to INFO
-    logging.getLogger().addHandler(handler)
-    
+    handler.setLevel(logging.INFO)
+
+    # ensure INFO-level messages from other addons propagate
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)           # <-- add this
+    root_logger.addHandler(handler)
+
     # Start thread
     global log_thread
     if log_thread is None or not log_thread.is_alive():
