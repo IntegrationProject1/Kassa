@@ -1,11 +1,10 @@
-# event_rabbitmq_consumer/models/event_create_consumer.py
-
 import pika
 import threading
 import time
 import logging
 import traceback
 import os
+import re
 from datetime import datetime
 from odoo import models, api
 from lxml import etree
@@ -22,63 +21,65 @@ SERVICE_QUEUES = ['event.created']
 EVENT_CREATE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
            elementFormDefault="qualified">
-
-  <xs:element name="CreateEvent">
-    <xs:complexType>
-      <xs:sequence>
-        <xs:element name="UUID" type="xs:dateTime"/>
-        <xs:element name="Name" type="xs:string"/>
-        <xs:element name="Description" type="xs:string"/>
-        <xs:element name="StartDateTime" type="xs:dateTime"/>
-        <xs:element name="EndDateTime" type="xs:dateTime"/>
-        <xs:element name="Location" type="xs:string"/>
-        <xs:element name="Organisator" type="xs:string"/>
-        <xs:element name="Capacity" type="xs:positiveInteger"/>
-        <xs:element name="EventType" type="xs:string"/>
-        <xs:element name="RegisteredUsers" minOccurs="0">
-          <xs:complexType>
+    <xs:element name="CreateEvent">
+        <xs:complexType>
             <xs:sequence>
-              <xs:element name="User" maxOccurs="unbounded">
-                <xs:complexType>
-                  <xs:sequence>
-                    <xs:element name="UUID" type="xs:dateTime"/>
-                  </xs:sequence>
-                </xs:complexType>
-              </xs:element>
+                <xs:element name="EventUUID" type="xs:dateTime"/>
+                <xs:element name="EventName" type="xs:string"/>
+                <xs:element name="EventDescription" type="xs:string"/>
+                <xs:element name="StartDateTime" type="xs:dateTime"/>
+                <xs:element name="EndDateTime" type="xs:dateTime"/>
+                <xs:element name="EventLocation" type="xs:string"/>
+                <xs:element name="Organisator" type="xs:string"/>
+                <xs:element name="Capacity" type="xs:positiveInteger"/>
+                <xs:element name="EventType" type="xs:string"/>
+                <xs:element name="RegisteredUsers" minOccurs="0">
+                    <xs:complexType>
+                        <xs:sequence>
+                            <xs:element name="User" minOccurs="0" maxOccurs="unbounded">
+                                <xs:complexType>
+                                    <xs:sequence>
+                                        <xs:element name="UUID" type="xs:dateTime"/>
+                                    </xs:sequence>
+                                </xs:complexType>
+                            </xs:element>
+                        </xs:sequence>
+                    </xs:complexType>
+                </xs:element>
             </xs:sequence>
-          </xs:complexType>
-        </xs:element>
-      </xs:sequence>
-    </xs:complexType>
-  </xs:element>
+        </xs:complexType>
+    </xs:element>
 </xs:schema>
 '''
+
 
 def log_message(message):
     print(f"[EVENT_CREATE_CONSUMER] {message}")
     _logger.info(message)
 
-def _format_uuid(raw_uuid):
-    try:
-        if isinstance(raw_uuid, str):
-            return raw_uuid.replace('T', ' ').replace('Z', '')
-        dt = datetime.fromisoformat(raw_uuid.replace('Z', '+00:00'))
-        return dt.isoformat(sep=' ')
-    except Exception:
-        return raw_uuid
-    
+def _validate_iso8601_zulu(value, field_name, require_microseconds=False):
+    """
+    Validate ISO 8601 format ending in 'Z', with optional strict microseconds.
+    """
+    if require_microseconds:
+        pattern = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$"
+    else:
+        pattern = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$"
 
-def _validate_iso8601_zulu(value, field_name):
+    if not re.match(pattern, value):
+        log_message(f"Invalid {field_name}: '{value}' — must match ISO 8601{' with 6-digit microseconds' if require_microseconds else ''} and end with 'Z'")
+        return False
+
     try:
         datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")
     except ValueError:
         try:
             datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
         except ValueError:
-            log_message(f"Invalid {field_name}: '{value}' — must be in ISO 8601 format like 2025-05-06T14:00:00Z")
+            log_message(f"Invalid {field_name}: '{value}' — unparseable datetime")
             return False
-    return True
 
+    return True
 
 class EventCreateThread(threading.Thread):
     def __init__(self, env):
@@ -98,8 +99,9 @@ class EventCreateThread(threading.Thread):
                     credentials=credentials,
                 ))
 
+                channel = connection.channel()
+
                 for queue in SERVICE_QUEUES:
-                    channel = connection.channel()
                     channel.queue_declare(queue=queue, durable=True)
 
                     def make_callback(q):
@@ -138,26 +140,30 @@ class EventCreateThread(threading.Thread):
                 log_message(f"XML validation failed:\n{error_details}")
                 return
 
-            uuid = xml.findtext('UUID')
+            uuid = xml.findtext('EventUUID')
             start_datetime = xml.findtext('StartDateTime')
             end_datetime = xml.findtext('EndDateTime')
 
-            # Validate formats
-            if not all([
-                _validate_iso8601_zulu(uuid, "UUID"),
-                _validate_iso8601_zulu(start_datetime, "StartDateTime"),
-                _validate_iso8601_zulu(end_datetime, "EndDateTime"),
-            ]):
-                log_message("Aborting message processing due to invalid datetime format.")
+            # Strict validation for UUID format: requires exactly 6 microsecond digits
+            if not _validate_iso8601_zulu(uuid, "EventUUID", require_microseconds=True):
+                log_message("Aborting message processing due to invalid EventUUID format.")
+                return
+
+            if not _validate_iso8601_zulu(start_datetime, "StartDateTime"):
+                log_message("Aborting message processing due to invalid StartDateTime format.")
+                return
+
+            if not _validate_iso8601_zulu(end_datetime, "EndDateTime"):
+                log_message("Aborting message processing due to invalid EndDateTime format.")
                 return
 
             vals = {
                 'uuid': uuid,
-                'name': xml.findtext('Name'),
-                'description': xml.findtext('Description'),
+                'name': xml.findtext('EventName'),
+                'description': xml.findtext('EventDescription'),
                 'start_datetime': start_datetime,
                 'end_datetime': end_datetime,
-                'location': xml.findtext('Location'),
+                'location': xml.findtext('EventLocation'),
                 'organisator': xml.findtext('Organisator'),
                 'capacity': int(xml.findtext('Capacity')),
                 'event_type': xml.findtext('EventType'),
@@ -169,15 +175,17 @@ class EventCreateThread(threading.Thread):
             if users_el is not None:
                 for user in users_el.findall('User'):
                     user_uuid = user.findtext('UUID')
+                    if not _validate_iso8601_zulu(user_uuid, "User UUID"):
+                        continue
                     partner = env['res.partner'].search([('external_id', '=', user_uuid)], limit=1)
                     if partner:
                         user_ids.append(partner.id)
+
             if user_ids:
                 vals['registered_user_ids'] = [(6, 0, user_ids)]
 
             env['event.event'].create(vals)
             log_message(f"Created event with UUID: {uuid}")
-
 
 # Global thread instance
 event_create_thread = None
