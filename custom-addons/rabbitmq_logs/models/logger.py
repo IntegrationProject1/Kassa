@@ -105,7 +105,6 @@ def log_sender_thread():
                 init_message = create_log_message(
                     "Odoo_POS", 
                     "INFO", 
-                    "SYSTEM_INIT", 
                     f"Odoo RabbitMQ logger initialized at {datetime.datetime.now().isoformat()}"
                 )
                 channel.basic_publish(
@@ -195,7 +194,10 @@ class RabbitMQLogHandler(logging.Handler):
                     "[CUSTOMER_CREATE_MODULE]",
                     "[CUSTOMER_UPDATE_MODULE]",
                     "[CUSTOMER_DELETE_MODULE]",
-                    "[USER_DELETE_MODULE]"
+                    "[USER_DELETE_MODULE]",
+                    "[EVENT_CREATE_CONSUMER]",
+                    "[EVENT_UPDATE_CONSUMER]", 
+                    "[EVENT_DELETE_CONSUMER]"
                 ]
                 
                 for tag in module_tags:
