@@ -62,7 +62,7 @@ jobs:
             --stop-after-init \
             --test-enable \
             --log-level=test \
-            --init=pos_kassa,rabbitmq_heartbeat,user_create,user_delete,user_update,rabbitmq_orders,rabbitmq_logs \            
+            --init=pos_kassa \            
             --addons-path=/mnt/extra-addons \
             --http-port=8070
           
