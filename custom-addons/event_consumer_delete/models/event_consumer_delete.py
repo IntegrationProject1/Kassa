@@ -15,7 +15,7 @@ RABBITMQ_PORT = int(os.getenv('RABBITMQ_PORT', 5672))
 RABBITMQ_USER = os.getenv('RABBITMQ_USER')
 RABBITMQ_PASSWORD = os.getenv('RABBITMQ_PASSWORD')
 
-DELETE_QUEUE = 'kassa.event.deleted'
+DELETE_QUEUE = 'kassa_event_deleted'
 
 DELETE_EVENT_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
