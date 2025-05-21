@@ -1,5 +1,3 @@
-# event_rabbitmq_consumer/models/event_update_consumer.py
-
 import pika
 import threading
 import time
@@ -26,15 +24,22 @@ UPDATE_EVENT_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
     <xs:element name="UpdateEvent">
         <xs:complexType>
             <xs:sequence>
-                <xs:element name="UUID" type="xs:dateTime"/>
-                <xs:element name="FieldsToUpdate" minOccurs="1">
+                <xs:element name="EventUUID" type="xs:dateTime"/>
+                <xs:element name="EventName" type="xs:string" minOccurs="0" maxOccurs="1"/>
+                <xs:element name="Description" type="xs:string" minOccurs="0" maxOccurs="1"/>
+                <xs:element name="StartDateTime" type="xs:dateTime" minOccurs="0" maxOccurs="1"/>
+                <xs:element name="EndDateTime" type="xs:dateTime" minOccurs="0" maxOccurs="1"/>
+                <xs:element name="EventLocation" type="xs:string" minOccurs="0" maxOccurs="1"/>
+                <xs:element name="Organisator" type="xs:string" minOccurs="0" maxOccurs="1"/>
+                <xs:element name="Capacity" type="xs:positiveInteger" minOccurs="0" maxOccurs="1"/>
+                <xs:element name="EventType" type="xs:string" minOccurs="0" maxOccurs="1"/>
+                <xs:element name="RegisteredUsers" minOccurs="0">
                     <xs:complexType>
                         <xs:sequence>
-                            <xs:element name="Field" maxOccurs="unbounded">
+                            <xs:element name="User" maxOccurs="unbounded" minOccurs="0">
                                 <xs:complexType>
                                     <xs:sequence>
-                                        <xs:element name="Name" type="xs:string"/>
-                                        <xs:element name="NewValue" type="xs:string"/>
+                                        <xs:element name="UUID" type="xs:string" minOccurs="0" maxOccurs="1"/>
                                     </xs:sequence>
                                 </xs:complexType>
                             </xs:element>
@@ -50,6 +55,17 @@ UPDATE_EVENT_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
 def log_message(message):
     print(f"[EVENT_UPDATE_CONSUMER] {message}")
     _logger.info(message)
+
+FIELD_MAP = {
+    'EventName': 'name',
+    'Description': 'description',
+    'StartDateTime': 'start_datetime',
+    'EndDateTime': 'end_datetime',
+    'EventLocation': 'location',
+    'Organisator': 'organisator',
+    'Capacity': 'capacity',
+    'EventType': 'event_type'
+}
 
 class EventUpdateThread(threading.Thread):
     def __init__(self, env):
@@ -104,8 +120,7 @@ class EventUpdateThread(threading.Thread):
                 error_details = "\n".join([f"Line {e.line}: {e.message}" for e in schema.error_log])
                 log_message(f"XML validation failed:\n{error_details}")
                 raise ValueError("Invalid XML structure")
-
-            uuid = xml.findtext('UUID')
+            uuid = xml.findtext('EventUUID')
             log_message(f"Processing update for event UUID: {uuid}")
 
             event = env['event.event'].search([('uuid', '=', uuid)], limit=1)
@@ -113,23 +128,23 @@ class EventUpdateThread(threading.Thread):
                 raise ValueError(f"No event found with UUID {uuid}")
 
             updates = {}
-            for field in xml.find('FieldsToUpdate').findall('Field'):
-                field_name = field.findtext('Name')
-                new_value = field.findtext('NewValue')
+            for child in xml:
+                tag = child.tag
+                if tag == 'EventUUID':
+                    continue
+                elif tag == 'RegisteredUsers':
+                    user_uuids = [user.findtext('UUID') for user in child.findall('User') if user.findtext('UUID')]
 
-                if field_name == 'registered_user_ids':
-                    try:
-                        external_uuids = json.loads(new_value)
-                        partners = env['res.partner'].search([('external_id', 'in', external_uuids)])
+                    if user_uuids:
+                        partners = env['res.partner'].search([('external_id', 'in', user_uuids)])
                         if not partners:
-                            raise ValueError(f"No matching res.partner records for UUIDs: {external_uuids}")
-                        updates[field_name] = [(6, 0, partners.ids)]  # REPLACE all with new set
+                            raise ValueError(f"No matching res.partner records for UUIDs: {user_uuids}")
+                        updates['registered_user_ids'] = [(6, 0, partners.ids)]
                         log_message(f"Setting registered_user_ids to partner IDs: {partners.ids}")
-                    except Exception as e:
-                        raise ValueError(f"Invalid format for registered_user_ids: {e}")
-                else:
-                    updates[field_name] = new_value
-                    log_message(f"Field to update: {field_name} -> {new_value}")
+                    else:
+                        # Explicitly clear all users if <RegisteredUsers> is empty
+                        updates['registered_user_ids'] = [(6, 0, [])]
+                        log_message("Clearing all registered_user_ids (empty RegisteredUsers)")
 
             event.write(updates)
             log_message(f"Successfully updated event with UUID: {uuid}")
