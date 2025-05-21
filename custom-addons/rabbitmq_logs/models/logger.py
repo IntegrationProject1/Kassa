@@ -1,8 +1,8 @@
+import os
 import logging
 import threading
 import time
 import pika
-import os
 import xml.etree.ElementTree as ET
 from lxml import etree
 import datetime
@@ -15,14 +15,14 @@ LOG_PREFIX = "[RABBITMQ_LOGS]"
 
 _logger = logging.getLogger(__name__)
 
-# RabbitMQ configuration
-RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'integrationproject-2425s2-001.westeurope.cloudapp.azure.com')
-RABBITMQ_PORT = int(os.environ.get('RABBITMQ_PORT', 30020)) 
-RABBITMQ_USER = os.environ.get('RABBITMQ_USER')
-RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD')
-RABBITMQ_EXCHANGE = 'log_monitoring'
-RABBITMQ_QUEUE = 'controlroom.log.event'
-ROUTING_KEY = 'controlroom.log.event'
+# RabbitMQ configuration – all pulled from environment for security
+RABBITMQ_HOST     = os.environ['RABBITMQ_HOST']
+RABBITMQ_PORT     = int(os.environ['RABBITMQ_PORT'])
+RABBITMQ_USER     = os.environ['RABBITMQ_USER']
+RABBITMQ_PASSWORD = os.environ['RABBITMQ_PASSWORD']
+RABBITMQ_EXCHANGE = os.environ['RABBITMQ_LOGS_EXCHANGE']
+RABBITMQ_QUEUE    = os.environ['RABBITMQ_LOGS_QUEUE']
+ROUTING_KEY       = os.environ['RABBITMQ_LOGS_ROUTING_KEY']
 
 
 # XML Schema
