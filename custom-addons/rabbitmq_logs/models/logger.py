@@ -194,7 +194,10 @@ class RabbitMQLogHandler(logging.Handler):
                     "[CUSTOMER_CREATE_MODULE]",
                     "[CUSTOMER_UPDATE_MODULE]",
                     "[CUSTOMER_DELETE_MODULE]",
-                    "[USER_DELETE_MODULE]"
+                    "[USER_DELETE_MODULE]",
+                    "[EVENT_CREATE_CONSUMER]",
+                    "[EVENT_UPDATE_CONSUMER]", 
+                    "[EVENT_DELETE_CONSUMER]"
                 ]
                 
                 for tag in module_tags:
