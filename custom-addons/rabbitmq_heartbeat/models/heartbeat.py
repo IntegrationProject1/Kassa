@@ -53,8 +53,8 @@ class HeartbeatThread(threading.Thread):
         self.running = True
         self.xsd_schema = None
         try:
-            xsd_root = etree.parse(io.StringIO(HEARTBEAT_XSD))
-            self.xsd_schema = etree.XMLSchema(xsd_root)
+            xsd_doc = etree.XML(HEARTBEAT_XSD.encode('utf-8'))
+            self.xsd_schema = etree.XMLSchema(xsd_doc)
             log_message("XSD schema for heartbeat validation loaded successfully")
         except Exception as e:
             log_message(f"Error loading XSD schema: {str(e)}")
