@@ -105,7 +105,6 @@ def log_sender_thread():
                 init_message = create_log_message(
                     "Odoo_POS", 
                     "INFO", 
-                    "SYSTEM_INIT", 
                     f"Odoo RabbitMQ logger initialized at {datetime.datetime.now().isoformat()}"
                 )
                 channel.basic_publish(
