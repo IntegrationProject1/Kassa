@@ -224,19 +224,72 @@ class OrderRabbitMQPublisher(models.AbstractModel):
         
         log_message(f"Order {order.id} is paid on account, processing for invoicing")
         
-        now = datetime.datetime.utcnow()
         partner = order.partner_id
         log_message(f"Checking if partner {partner.name} is registered for any active events")
 
-        event = self.env['event.event'].search([
-            ('start_datetime', '<=', now.strftime('%Y-%m-%d %H:%M:%S')),
-            ('end_datetime', '>=', now.strftime('%Y-%m-%d %H:%M:%S')),
-            ('registered_user_ids', 'in', partner.id)
-        ], limit=1)
-
-        if event:
-            log_message(f"Found active event '{event.name}' for user '{partner.name}', will store for bulk processing")
-            self._store_event_order(order, event)
+        # Get current time in UTC for proper comparison
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        now_utc_str = now_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+        log_message(f"Current UTC time: {now_utc_str}")
+        
+        # Get all non-invoiced events
+        potential_events = self.env['event.event'].search([
+            ('is_invoiced', '=', False)
+        ])
+        
+        active_event = None
+        for event in potential_events:
+            try:
+                log_message(f"Checking if event {event.name} (ID: {event.id}) is active")
+                
+                # Parse start time
+                if 'T' in event.start_datetime:
+                    if 'Z' in event.start_datetime:
+                        start_dt_str = event.start_datetime.replace('Z', '+00:00')
+                    else:
+                        start_dt_str = event.start_datetime
+                    start_dt = datetime.datetime.fromisoformat(start_dt_str)
+                else:
+                    start_dt_naive = datetime.datetime.strptime(event.start_datetime, '%Y-%m-%d %H:%M:%S')
+                    start_dt = start_dt_naive.replace(tzinfo=datetime.timezone.utc)
+                    
+                # Parse end time
+                if 'T' in event.end_datetime:
+                    if 'Z' in event.end_datetime:
+                        end_dt_str = event.end_datetime.replace('Z', '+00:00')
+                    else:
+                        end_dt_str = event.end_datetime
+                    end_dt = datetime.datetime.fromisoformat(end_dt_str)
+                else:
+                    end_dt_naive = datetime.datetime.strptime(event.end_datetime, '%Y-%m-%d %H:%M:%S')
+                    end_dt = end_dt_naive.replace(tzinfo=datetime.timezone.utc)
+                
+                log_message(f"Event time range: {start_dt} to {end_dt}")
+                
+                # Check if event is active (current time is between start and end)
+                if start_dt <= now_utc <= end_dt:
+                    log_message(f"Event is active, checking if user {partner.name} (ID: {partner.id}) is registered")
+                    
+                    # Get all registered users for diagnostics
+                    registered_ids = [user.id for user in event.registered_user_ids]
+                    log_message(f"Event has {len(registered_ids)} registered users with IDs: {registered_ids}")
+                    
+                    # Check if user is registered for this event
+                    if partner.id in registered_ids:
+                        log_message(f"User {partner.name} (ID: {partner.id}) is registered for active event {event.name}")
+                        active_event = event
+                        break
+                    else:
+                        log_message(f"User {partner.name} (ID: {partner.id}) is NOT registered for this event")
+                else:
+                    log_message(f"Event {event.name} is not active at current time")
+                    
+            except Exception as e:
+                log_message(f"Error checking event {event.name}: {str(e)}")
+        
+        if active_event:
+            log_message(f"Found active event '{active_event.name}' for user '{partner.name}', will store for bulk processing")
+            self._store_event_order(order, active_event)
         else:
             log_message(f"No active event found for user '{partner.name}', sending directly to queue")
             self._publish_order_to_queue(order)
@@ -320,38 +373,66 @@ class OrderRabbitMQPublisher(models.AbstractModel):
                 domain.append(('id', '=', event_id))
                 log_message(f"Filtering for specific event ID: {event_id}")
             else:
-                # Anders, filter events die recent zijn afgelopen
-                # Probeer parse te doen op end_datetime, vang fouten op voor verschillende formaten
-                candidates = self.env['event.event'].search(domain)
+                # Add this try/except to pre-filter events that might have ended
+                try:
+                    now_utc_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                    log_message(f"Pre-filtering candidates with end date before {now_utc_str}")
+                    # This is a rough pre-filter that could help reduce the candidates
+                    candidates = self.env['event.event'].search([
+                        ('is_invoiced', '=', False),
+                        # Add a simple string comparison as a first-pass filter
+                        # This won't be perfect but will help reduce candidates
+                        ('end_datetime', '<', now_utc_str)
+                    ])
+                    log_message(f"Pre-filter found {len(candidates)} potential ended events")
+                except Exception as e:
+                    log_message(f"Pre-filtering error: {str(e)}, using standard query")
+                    candidates = self.env['event.event'].search(domain)
+                
                 ended_events = []
                 
                 for event in candidates:
                     log_message(f"Checking if event {event.name} (ID: {event.id}) has ended")
                     try:
-                        # Probeer ISO format (met T separator)
-                        if 'T' in event.end_datetime:
-                            end_dt_str = event.end_datetime.replace('Z', '+00:00')
-                            end_dt = datetime.datetime.fromisoformat(end_dt_str)
-                            log_message(f"  - End time parsed as ISO: {end_dt}")
-                        else:
-                            # Probeer standaard Odoo format
-                            end_dt = datetime.datetime.strptime(event.end_datetime, '%Y-%m-%d %H:%M:%S')
-                            log_message(f"  - End time parsed as standard: {end_dt}")
+                        # Get current time in UTC with timezone info for proper comparison
+                        now_utc = datetime.datetime.now(datetime.timezone.utc)
                         
-                        # Check of event is afgelopen (eindtijd < nu)
-                        if end_dt < now:
+                        # Parse end datetime with proper timezone handling
+                        if 'T' in event.end_datetime:
+                            # Handle ISO format with timezone
+                            if 'Z' in event.end_datetime:
+                                # Replace Z with +00:00 for proper ISO parsing
+                                end_dt_str = event.end_datetime.replace('Z', '+00:00')
+                            else:
+                                end_dt_str = event.end_datetime
+                                
+                            # Parse as ISO format with timezone awareness
+                            end_dt = datetime.datetime.fromisoformat(end_dt_str)
+                            log_message(f"  - End time parsed as ISO with timezone: {end_dt}")
+                        else:
+                            # Standard Odoo format - make timezone aware for comparison
+                            end_dt_naive = datetime.datetime.strptime(event.end_datetime, '%Y-%m-%d %H:%M:%S')
+                            # Assume UTC if no timezone info
+                            end_dt = end_dt_naive.replace(tzinfo=datetime.timezone.utc)
+                            log_message(f"  - End time parsed as standard with UTC timezone: {end_dt}")
+                        
+                        # Now both datetimes are timezone-aware for proper comparison
+                        if end_dt < now_utc: 
                             log_message(f"  - Event has ended, adding to processing list")
                             ended_events.append(event.id)
                         else:
-                            log_message(f"  - Event has not ended yet, skipping")
+                            log_message(f"  - Event has not ended yet (end: {end_dt}, now: {now_utc}), skipping")
                     except Exception as e:
                         log_message(f"  - Error parsing end date: {str(e)}, skipping event")
+                        log_message(f"  - Event datetime string: '{event.end_datetime}'")
                 
                 if ended_events:
                     domain.append(('id', 'in', ended_events))
                     log_message(f"Filtering for ended events: {ended_events}")
                 else:
                     log_message(f"No ended events found")
+                    # Add this line to ensure no events are processed if none have ended
+                    domain.append(('id', '=', -1))  # This will match no records
             
             log_message(f"Final search domain: {domain}")
             
@@ -504,7 +585,6 @@ class OrderRabbitMQPublisher(models.AbstractModel):
         root = ET.Element("Order")
         ET.SubElement(root, "Date").text = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
         ET.SubElement(root, "UUID").text = user_uuid
-        ET.SubElement(root, "EventUUID").text = event.uuid
         
         products_element = ET.SubElement(root, "Products")
         for product_nr, details in products.items():
