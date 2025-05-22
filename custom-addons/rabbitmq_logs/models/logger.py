@@ -174,7 +174,7 @@ class RabbitMQLogHandler(logging.Handler):
                 
             # Format the log message
             message = self.format(record)
-        
+
             # Determine status from log level
             if record.levelno >= logging.ERROR:
                 status = "ERROR"
@@ -182,8 +182,20 @@ class RabbitMQLogHandler(logging.Handler):
                 status = "WARNING"
             else:
                 status = "INFO"
-            
-            # Use the same service name as heartbeat: Odoo_POS
+
+            # Force ERROR if exception info attached
+            if record.exc_info:
+                status = "ERROR"
+
+            # --- NEW: keyword override for addons that always log INFO ---
+            text = record.getMessage().lower()
+            if status == "INFO":
+                if "error " in text or text.startswith("error"):
+                    status = "ERROR"
+                elif "warning " in text or text.startswith("warning"):
+                    status = "WARNING"
+
+            # Use the same service name as heartbeat
             service_name = "Odoo_POS"
             
             # Look for module identifiers like [ORDER_MODULE], [CUSTOMER_CREATE_MODULE], etc.
