@@ -138,8 +138,10 @@ class TestRabbitMQOrders(TransactionCase):
         self.assertEqual(len(products.findall("Product")), 1)
         product = products.find("Product")
         self.assertEqual(product.find("ProductNR").text, str(self.product_1.id))
+        self.assertEqual(product.find("ProductNaam").text, self.product_1.name)
         self.assertEqual(product.find("Quantity").text, "2.00")
         self.assertEqual(product.find("UnitPrice").text, "10.00")
+
         
     @patch('odoo.addons.rabbitmq_orders.models.pos_order.OrderRabbitMQPublisher._publish_order_to_queue')
     @patch('odoo.addons.rabbitmq_orders.models.pos_order.OrderRabbitMQPublisher._store_event_order')

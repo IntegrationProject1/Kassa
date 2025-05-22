@@ -18,20 +18,21 @@ ORDER_MESSAGE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
   <xs:element name="Order">
     <xs:complexType>
       <xs:sequence>
-        <xs:element name="Date" type="xs:dateTime"/>
+        <xs:element name="Date" type="xs:string"/>
         <xs:element name="UUID" type="xs:dateTime"/>
         <xs:element name="Products">
           <xs:complexType>
             <xs:sequence>
               <xs:element name="Product" maxOccurs="unbounded">
                 <xs:complexType>
-                  <xs:sequence>
+                    <xs:sequence>
                     <xs:element name="ProductNR" type="xs:decimal"/>
+                    <xs:element name="ProductNaam" type="xs:string"/>
                     <xs:element name="Quantity" type="xs:decimal"/>
                     <xs:element name="UnitPrice" type="xs:decimal"/>
-                  </xs:sequence>
+                    </xs:sequence>
                 </xs:complexType>
-              </xs:element>
+                </xs:element>
             </xs:sequence>
           </xs:complexType>
         </xs:element>
@@ -319,15 +320,18 @@ class OrderRabbitMQPublisher(models.AbstractModel):
             return
 
         root = ET.Element("Order")
-        ET.SubElement(root, "Date").text = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        ET.SubElement(root, "Date").text = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         ET.SubElement(root, "UUID").text = uuid_value
 
         products = ET.SubElement(root, "Products")
         for line in order.lines:
             product = ET.SubElement(products, "Product")
             ET.SubElement(product, "ProductNR").text = str(line.product_id.id)
+            ET.SubElement(product, "ProductNaam").text = line.product_id.name  # <-- nieuwe regel
             ET.SubElement(product, "Quantity").text = f"{line.qty:.2f}"
             ET.SubElement(product, "UnitPrice").text = f"{line.price_unit:.2f}"
+
+
 
         xml_str = ET.tostring(root, encoding='unicode')
 
@@ -583,15 +587,22 @@ class OrderRabbitMQPublisher(models.AbstractModel):
         log_message(f"Creating billing XML for user {user_uuid} in event {event.name}")
         
         root = ET.Element("Order")
-        ET.SubElement(root, "Date").text = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        ET.SubElement(root, "Date").text = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         ET.SubElement(root, "UUID").text = user_uuid
         
         products_element = ET.SubElement(root, "Products")
         for product_nr, details in products.items():
             product = ET.SubElement(products_element, "Product")
             ET.SubElement(product, "ProductNR").text = product_nr
+
+            # Lookup naam
+            product_record = self.env['product.product'].search([('id', '=', int(product_nr))], limit=1)
+            product_name = product_record.name if product_record else 'Onbekend'
+            ET.SubElement(product, "ProductNaam").text = product_name
+
             ET.SubElement(product, "Quantity").text = f"{details['quantity']:.2f}"
             ET.SubElement(product, "UnitPrice").text = f"{details['unit_price']:.2f}"
+
             log_message(f"Added product {product_nr}: quantity={details['quantity']}, unit_price={details['unit_price']}")
         
         xml_str = ET.tostring(root, encoding='unicode')
