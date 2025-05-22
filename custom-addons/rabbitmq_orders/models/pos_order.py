@@ -18,7 +18,7 @@ ORDER_MESSAGE_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
   <xs:element name="Order">
     <xs:complexType>
       <xs:sequence>
-        <xs:element name="Date" type="xs:dateTime"/>
+        <xs:element name="Date" type="xs:string"/>
         <xs:element name="UUID" type="xs:dateTime"/>
         <xs:element name="Products">
           <xs:complexType>
@@ -320,7 +320,7 @@ class OrderRabbitMQPublisher(models.AbstractModel):
             return
 
         root = ET.Element("Order")
-        ET.SubElement(root, "Date").text = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        ET.SubElement(root, "Date").text = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         ET.SubElement(root, "UUID").text = uuid_value
 
         products = ET.SubElement(root, "Products")
@@ -587,7 +587,7 @@ class OrderRabbitMQPublisher(models.AbstractModel):
         log_message(f"Creating billing XML for user {user_uuid} in event {event.name}")
         
         root = ET.Element("Order")
-        ET.SubElement(root, "Date").text = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        ET.SubElement(root, "Date").text = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         ET.SubElement(root, "UUID").text = user_uuid
         
         products_element = ET.SubElement(root, "Products")

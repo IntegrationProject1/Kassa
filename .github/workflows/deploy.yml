@@ -62,16 +62,17 @@ jobs:
             --stop-after-init \
             --test-enable \
             --log-level=test \
-            --init=pos_kassa \            
+            --init=pos_kassa \
             --addons-path=/mnt/extra-addons \
             --http-port=8070
+
           
           # Store test exit code
           TEST_EXIT_CODE=$?
           
-          # Show container logs for debugging
-          echo "Odoo container logs:"
-          docker compose logs odoo
+          # Show test output directly from the container's stdout
+          echo "Odoo test output:"
+          docker logs $ODOO_CONTAINER --tail 500
           
           # Cleanup 
           docker compose down
