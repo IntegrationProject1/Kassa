@@ -587,7 +587,7 @@ class OrderRabbitMQPublisher(models.AbstractModel):
         log_message(f"Creating billing XML for user {user_uuid} in event {event.name}")
         
         root = ET.Element("Order")
-        ET.SubElement(root, "Date").text = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        ET.SubElement(root, "Date").text = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
         ET.SubElement(root, "UUID").text = user_uuid
         
         products_element = ET.SubElement(root, "Products")
