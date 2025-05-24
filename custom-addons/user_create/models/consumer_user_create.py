@@ -66,14 +66,17 @@ EMAIL_XSD_SCHEMA = '''<?xml version="1.0" encoding="UTF-8"?>
   <xs:element name="emailMessage">
     <xs:complexType>
       <xs:sequence>
-        <xs:element name="to" type="xs:string"/>
+        <xs:element name="to"   type="xs:string"/>
         <xs:element name="from" type="xs:string"/>
         <xs:element name="subject" type="xs:string"/>
         <xs:element name="title" type="xs:string"/>
         <xs:element name="opener" type="xs:string"/>
         <xs:element name="body" type="xs:string"/>
         <xs:element name="footer" type="xs:string"/>
+        <xs:element name="barcode" type="xs:string" minOccurs="0"/>
+        <xs:element name="attachmenturl" type="xs:string" minOccurs="0"/>
       </xs:sequence>
+      <!-- Nieuw attribuut: naam van de service -->
       <xs:attribute name="service" type="xs:string" use="required"/>
     </xs:complexType>
   </xs:element>
@@ -457,14 +460,21 @@ class CustomerCreateThread(threading.Thread):
             ET.SubElement(root, "from").text = "no.reply.expomail@gmail.com"
             ET.SubElement(root, "subject").text = "Your Personal QR Code"
             ET.SubElement(root, "title").text = "Your Personal QR Code"
-            ET.SubElement(root, "opener").text = f"Dear {partner.name},"
+            ET.SubElement(root, "opener").text = f"Dear {partner.name}, thank you for registering. Below is your personal QR code."
             
-            # Create body element first, then set its text - exactly like the publisher
+            # Create body element with a nice message
             body_elem = ET.SubElement(root, "body")
-            body_elem.text = qr_data  # Just send the QR identifier
+            body_elem.text = """Your personal QR code has been generated. You can use this QR code to identify yourself in our system. 
+Simply show the QR code when requested, and our system will recognize you immediately.
+Keep this QR code safe and accessible for future use."""
             
             # Footer content
             ET.SubElement(root, "footer").text = "If you have any questions, please contact our support team."
+            
+            # Add the QR code data to the new qrcode element
+            ET.SubElement(root, "barcode").text = qr_data
+
+            ET.SubElement(root, "service").text = "qrcode"
             
             # Convert to XML string
             xml_string = ET.tostring(root, encoding='utf-8', method='xml').decode('utf-8')
