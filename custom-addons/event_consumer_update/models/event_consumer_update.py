@@ -118,7 +118,7 @@ class EventUpdateThread(threading.Thread):
             schema = etree.XMLSchema(etree.fromstring(UPDATE_EVENT_XSD.encode()))
             if not schema.validate(xml):
                 error_details = "\n".join([f"Line {e.line}: {e.message}" for e in schema.error_log])
-                log_message(f"XML validation failed:\n{error_details}")
+                log_message(f"Error: XML validation failed:\n{error_details}")
                 raise ValueError("Invalid XML structure")
             uuid = xml.findtext('EventUUID')
             log_message(f"Processing update for event UUID: {uuid}")

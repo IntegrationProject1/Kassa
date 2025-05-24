@@ -143,7 +143,7 @@ class HeartbeatThread(threading.Thread):
         
         # Add ServiceName element - only field needed per new schema
         service_name = ET.SubElement(root, "ServiceName")
-        service_name.text = "Odoo_POS"
+        service_name.text = "Kassa"
         
         # Convert to string and return
         xml_message = ET.tostring(root, encoding="utf-8", method="xml").decode()

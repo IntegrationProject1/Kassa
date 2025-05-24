@@ -128,7 +128,7 @@ class CustomerUpdateThread(threading.Thread):
                                         log_message(f"Message from {queue} processed successfully")
                                     else:
                                         ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-                                        log_message(f"Message from {queue} processing failed")
+                                        log_message(f"Error: Message from {queue} processing failed")
                                 except Exception as e:
                                     log_message(f"Error processing message from {queue}: {str(e)}")
                                     log_message(traceback.format_exc())
@@ -160,7 +160,7 @@ class CustomerUpdateThread(threading.Thread):
                             break
                 
             except Exception as e:
-                log_message(f"RabbitMQ connection error: {str(e)}")
+                log_message(f"Error: RabbitMQ connection error: {str(e)}")
                 log_message(traceback.format_exc())
                 # Wait before retrying
                 time.sleep(10)
@@ -198,16 +198,16 @@ class CustomerUpdateThread(threading.Thread):
                 # Validate
                 if not schema.validate(xml_doc):
                     validation_errors = schema.error_log
-                    log_message(f"XML validation errors: {validation_errors}")
+                    log_message(f"Error: XML validation errors: {validation_errors}")
                     return False
                     
                 log_message("XML message validated successfully against schema")
                 
             except etree.XMLSyntaxError as xml_err:
-                log_message(f"XML syntax error: {str(xml_err)}")
+                log_message(f"Error: XML syntax error: {str(xml_err)}")
                 return False
             except Exception as validate_err:
-                log_message(f"XML validation error: {str(validate_err)}")
+                log_message(f"Error: XML validation error: {str(validate_err)}")
                 return False
                 
             # Create a new environment with a new cursor
@@ -220,7 +220,7 @@ class CustomerUpdateThread(threading.Thread):
                     # Parse the customer data from the XML
                     customer_data = self._parse_customer_data(xml_doc)
                     if not customer_data:
-                        log_message("Failed to parse customer data from XML")
+                        log_message("Error: Failed to parse customer data from XML")
                         return False
                     
                     # Process the customer data (create/update/delete)
@@ -232,7 +232,7 @@ class CustomerUpdateThread(threading.Thread):
                         return True
                     else:
                         new_cr.rollback()
-                        log_message("Customer update failed, rolling back")
+                        log_message("Error: Customer update failed, rolling back")
                         return False
                         
                 except Exception as e:
@@ -257,7 +257,7 @@ class CustomerUpdateThread(threading.Thread):
             time_of_action_elem = xml_doc.find('.//TimeOfAction')
             
             if action_type_elem is None or uuid_elem is None or time_of_action_elem is None:
-                log_message("Required elements missing from XML")
+                log_message("Warning: Required elements missing from XML")
                 return None
                 
             customer_data['action_type'] = action_type_elem.text
@@ -334,11 +334,11 @@ class CustomerUpdateThread(threading.Thread):
             if customer:
                 log_message(f"Found customer by external_id={customer_id}: ID={customer.id}, Name={customer.name}")
             else:
-                log_message(f"No customer found with external_id={customer_id}")
+                log_message(f"Warning: No customer found with external_id={customer_id}")
             
             if customer_data.get('action_type') == 'UPDATE':
                 if not customer:
-                    log_message(f"Customer with UUID {customer_id} not found for update")
+                    log_message(f"Warning: Customer with UUID {customer_id} not found for update")
                     return False
                     
                 log_message(f"Updating customer with UUID {customer_id}, database ID: {customer.id}, external_id: {customer.external_id}")
@@ -484,7 +484,7 @@ class CustomerUpdateThread(threading.Thread):
                 return True
                 
             else:
-                log_message(f"Unknown action type: {customer_data.get('action_type')}")
+                log_message(f"Error: Unknown action type: {customer_data.get('action_type')}")
                 return False
                 
         except Exception as e:

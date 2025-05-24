@@ -166,11 +166,11 @@ class OrderRabbitMQPublisher(models.AbstractModel):
                 log_message(f"XML validation successful")
             else:
                 validation_errors = schema.error_log
-                log_message(f"XML validation failed with errors: {validation_errors}")
+                log_message(f"Error: XML validation failed with errors: {validation_errors}")
                 
             return is_valid
         except Exception as e:
-            log_message(f"XML validation error: {str(e)}")
+            log_message(f"Error: XML validation error: {str(e)}")
             return False
 
     def _publish_message(self, message, queue_name):
@@ -195,7 +195,7 @@ class OrderRabbitMQPublisher(models.AbstractModel):
             log_message(f"Published order to {queue_name}")
             connection.close()
         except Exception as e:
-            log_message(f"Error publishing order message: {e}")
+            log_message(f"Error: Publishing order message: {e}")
 
     def _handle_order(self, order):
         # Check betaalmethode - alleen orders op rekening doorsturen
@@ -281,9 +281,9 @@ class OrderRabbitMQPublisher(models.AbstractModel):
                         active_event = event
                         break
                     else:
-                        log_message(f"User {partner.name} (ID: {partner.id}) is NOT registered for this event")
+                        log_message(f"Warning: User {partner.name} (ID: {partner.id}) is NOT registered for this event")
                 else:
-                    log_message(f"Event {event.name} is not active at current time")
+                    log_message(f"Warning: Event {event.name} is not active at current time")
                     
             except Exception as e:
                 log_message(f"Error checking event {event.name}: {str(e)}")
@@ -316,7 +316,7 @@ class OrderRabbitMQPublisher(models.AbstractModel):
         uuid_value = partner.external_id
 
         if not uuid_value:
-            log_message(f"Missing external_id for partner {partner.name}, skipping publish")
+            log_message(f"Error: Missing external_id for partner {partner.name}, skipping publish")
             return
 
         root = ET.Element("Order")
@@ -336,7 +336,7 @@ class OrderRabbitMQPublisher(models.AbstractModel):
         xml_str = ET.tostring(root, encoding='unicode')
 
         if not self.validate_xml_against_xsd(xml_str):
-            log_message("Generated order XML failed XSD validation")
+            log_message("Error: Generated order XML failed XSD validation")
             return
 
         self._publish_message(xml_str, queue_name="order.created")
@@ -428,13 +428,13 @@ class OrderRabbitMQPublisher(models.AbstractModel):
                             log_message(f"  - Event has not ended yet (end: {end_dt}, now: {now_utc}), skipping")
                     except Exception as e:
                         log_message(f"  - Error parsing end date: {str(e)}, skipping event")
-                        log_message(f"  - Event datetime string: '{event.end_datetime}'")
+                        log_message(f"  - Error: Event datetime string: '{event.end_datetime}'")
                 
                 if ended_events:
                     domain.append(('id', 'in', ended_events))
                     log_message(f"Filtering for ended events: {ended_events}")
                 else:
-                    log_message(f"No ended events found")
+                    log_message(f"Warning: No ended events found")
                     # Add this line to ensure no events are processed if none have ended
                     domain.append(('id', '=', -1))  # This will match no records
             

@@ -89,11 +89,12 @@ class EventDeleteThread(threading.Thread):
 
             if not schema.validate(xml):
                 error_details = "\n".join([f"Line {e.line}: {e.message}" for e in schema.error_log])
-                log_message(f"XML validation failed:\n{error_details}")
+                log_message(f"Error: XML validation failed:\n{error_details}")
                 raise ValueError("Invalid XML structure")
 
             uuid = xml.findtext('EventUUID')
             log_message(f"Attempting to delete event with UUID: {uuid}")
+
 
 
             event = env['event.event'].search([('uuid', '=', uuid)], limit=1)
@@ -101,7 +102,7 @@ class EventDeleteThread(threading.Thread):
                 event.unlink()
                 log_message(f"Event with UUID {uuid} successfully deleted.")
             else:
-                log_message(f"No event found with UUID {uuid}")
+                log_message(f"Warning: No event found with UUID {uuid}")
 
 # Global thread instance
 event_delete_thread = None
