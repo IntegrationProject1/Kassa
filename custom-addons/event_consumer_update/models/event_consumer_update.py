@@ -16,7 +16,7 @@ RABBITMQ_PORT = int(os.getenv('RABBITMQ_PORT', 5672))
 RABBITMQ_USER = os.getenv('RABBITMQ_USER')
 RABBITMQ_PASSWORD = os.getenv('RABBITMQ_PASSWORD')
 
-UPDATE_QUEUE = 'event.updated'
+UPDATE_QUEUE = 'kassa_event_update'
 
 UPDATE_EVENT_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
@@ -26,7 +26,7 @@ UPDATE_EVENT_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
             <xs:sequence>
                 <xs:element name="EventUUID" type="xs:dateTime"/>
                 <xs:element name="EventName" type="xs:string" minOccurs="0" maxOccurs="1"/>
-                <xs:element name="Description" type="xs:string" minOccurs="0" maxOccurs="1"/>
+                <xs:element name="EventDescription" type="xs:string" minOccurs="0" maxOccurs="1"/>
                 <xs:element name="StartDateTime" type="xs:dateTime" minOccurs="0" maxOccurs="1"/>
                 <xs:element name="EndDateTime" type="xs:dateTime" minOccurs="0" maxOccurs="1"/>
                 <xs:element name="EventLocation" type="xs:string" minOccurs="0" maxOccurs="1"/>
@@ -58,7 +58,7 @@ def log_message(message):
 
 FIELD_MAP = {
     'EventName': 'name',
-    'Description': 'description',
+    'EventDescription': 'event_description',
     'StartDateTime': 'start_datetime',
     'EndDateTime': 'end_datetime',
     'EventLocation': 'location',

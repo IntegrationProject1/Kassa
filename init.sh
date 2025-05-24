@@ -11,4 +11,3 @@ else
 fi
 
 exec odoo -c /etc/odoo/odoo.conf
-

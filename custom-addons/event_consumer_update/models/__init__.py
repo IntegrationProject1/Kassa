@@ -1,1 +1,1 @@
-from . import test_event_consumer_update
+from . import event_consumer_update

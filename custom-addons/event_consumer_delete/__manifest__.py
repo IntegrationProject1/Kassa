@@ -1,7 +1,7 @@
 {
     'name': 'Event delete consumer rabbitmq',
     'version': '1.0',
-    'depends': ['base', 'event_adder'], 
+    'depends': ['base'], 
     'author': 'Jorn De Smet',
     'category': 'Custom',
     'data': [], 

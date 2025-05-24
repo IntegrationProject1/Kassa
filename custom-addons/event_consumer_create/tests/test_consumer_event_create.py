@@ -38,7 +38,7 @@ class TestEventCreateConsumer(TransactionCase):
 
         with patch.object(self.env['event.event'], 'create') as mock_create:
             mock_create.return_value = MagicMock(id=123)
-            self.thread._process_message(valid_xml.encode('utf-8'), 'event.created')
+            self.thread._process_message(valid_xml.encode('utf-8'), 'kassa_event_create')
 
             mock_create.assert_called_once()
             create_vals = mock_create.call_args[0][0]
@@ -50,7 +50,7 @@ class TestEventCreateConsumer(TransactionCase):
     def test_invalid_xml_format(self):
         """Test processing message with malformed XML"""
         invalid_xml = '''<CreateEvent><EventUUID>2025-05-06T14:00:00Z</EventUUID><EventName>Broken'''
-        result = self.thread._process_message(invalid_xml.encode('utf-8'), 'event.created')
+        result = self.thread._process_message(invalid_xml.encode('utf-8'), 'kassa_event_create')
         self.assertIsNone(result)
 
     def test_invalid_datetime_format(self):
@@ -68,7 +68,7 @@ class TestEventCreateConsumer(TransactionCase):
             <EventType>Meetup</EventType>
         </CreateEvent>
         '''
-        result = self.thread._process_message(invalid_datetime_xml.encode('utf-8'), 'event.created')
+        result = self.thread._process_message(invalid_datetime_xml.encode('utf-8'), 'kassa_event_create')
         self.assertIsNone(result)
 
     def test_schema_validation_failure(self):
@@ -86,5 +86,5 @@ class TestEventCreateConsumer(TransactionCase):
             <EventType>Meetup</EventType>
         </CreateEvent>
         '''
-        result = self.thread._process_message(missing_tag_xml.encode('utf-8'), 'event.created')
+        result = self.thread._process_message(missing_tag_xml.encode('utf-8'), 'kassa_event_create')
         self.assertIsNone(result)
