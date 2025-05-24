@@ -32,8 +32,9 @@ LOG_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
     <xs:complexType>
       <xs:sequence>
         <xs:element name="ServiceName" type="xs:string"/>
-        <xs:element name="Status" type="xs:string"/>
-        <xs:element name="Message" type="xs:string"/>
+        <xs:element name="Status"      type="xs:string"/>
+        <xs:element name="Code"        type="xs:string" minOccurs="0"/>
+        <xs:element name="Message"     type="xs:string"/>
       </xs:sequence>
     </xs:complexType>
   </xs:element>
@@ -49,28 +50,25 @@ def print_log(message):
     timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
     print(f"{timestamp} {LOG_PREFIX} {message}", file=sys.stderr)
 
-def create_log_message(service_name, status, message):
-    """Create XML log message"""
+def create_log_message(service_name, status, message, code=None):
+    """Create XML log message, now with optional Code"""
     root = ET.Element("Log")
-    
     ET.SubElement(root, "ServiceName").text = service_name
-    ET.SubElement(root, "Status").text = status
-    ET.SubElement(root, "Message").text = message
-    
+    ET.SubElement(root, "Status").text      = status
+    if code:
+        ET.SubElement(root, "Code").text    = code    # ← new
+    ET.SubElement(root, "Message").text     = message
     return ET.tostring(root, encoding="utf-8", method="xml").decode()
 
-def send_log_to_queue(service_name, status, message):
+def send_log_to_queue(service_name, status, message, code=None):
     """Add a log message to the queue"""
-    # Skip logs from the logger module itself to prevent recursion
+    # Skip recursion…
     if "rabbitmq_logs" in service_name.lower():
         return
-    
-    # Truncate message if too long
+    # Truncate…
     if message and len(message) > 2000:
         message = message[:1997] + "..."
-        
-    # Create XML message and add to queue - ignore the code parameter
-    xml_message = create_log_message(service_name, status, message)
+    xml_message = create_log_message(service_name, status, message, code)  # ← pass code
     log_queue.put(xml_message)
 
 def log_sender_thread():
@@ -161,9 +159,10 @@ class RabbitMQLogHandler(logging.Handler):
     """Custom handler to send logs to RabbitMQ - now captures INFO logs too"""
     def emit(self, record):
         try:
-            # Filter out certain loggers that generate too much noise
-            if record.name in ['werkzeug', 'odoo.http']:
-                return
+
+             # Filter out certain loggers that generate too much noise
+            if record.name in ['werkzeug', 'odoo.http', 'odoo.addons.base.models.ir_cron']:
+                 return
             
             # Skip heartbeat-related logs to avoid duplication
             if "HEARTBEAT" in record.name.upper() or \
@@ -195,31 +194,26 @@ class RabbitMQLogHandler(logging.Handler):
                 elif "warning " in text or text.startswith("warning"):
                     status = "WARNING"
 
-            # Use Kassa as service name
-            service_name = "Kassa"  # was "Odoo_POS"
-            
-            # Look for module identifiers like [ORDER_MODULE], [CUSTOMER_CREATE_MODULE], etc.
-            if hasattr(record, 'msg') and isinstance(record.msg, str):
-                message_str = record.msg
-                module_tags = [
-                    "[ORDER_MODULE]", 
-                    "[CUSTOMER_CREATE_MODULE]",
-                    "[CUSTOMER_UPDATE_MODULE]",
-                    "[CUSTOMER_DELETE_MODULE]",
+            # extract module tag
+            module_name = None
+            if isinstance(record.msg, str):
+                for tag in [
+                    "[ORDER_MODULE]", "[CUSTOMER_CREATE_MODULE]",
+                    "[CUSTOMER_UPDATE_MODULE]", "[CUSTOMER_DELETE_MODULE]",
                     "[USER_DELETE_MODULE]",
-                    "[EVENT_CREATE_CONSUMER]",
-                    "[EVENT_UPDATE_CONSUMER]", 
+                    "[EVENT_CREATE_CONSUMER]", "[EVENT_UPDATE_CONSUMER]",
                     "[EVENT_DELETE_CONSUMER]"
-                ]
-                
-                for tag in module_tags:
-                    if tag in message_str:
-                        # Override the code with a more specific one based on the module tag
-                        module_name = tag.strip('[]')
+                ]:
+                    if tag in record.msg:
+                        module_name = tag.strip("[]")
                         break
-            
-            # Send log to queue
-            send_log_to_queue(service_name, status, message)
+
+            # if found, use it as the service-name
+            service = module_name or "Kassa"
+            code    = None if not module_name else "Kassa"
+
+            # now pass both through (or drop code if unused)
+            send_log_to_queue(service, status, message, code)
         except Exception as e:
             print(f"Error in RabbitMQ log handler: {e}")
 
@@ -251,29 +245,6 @@ class RabbitMQLogStarter(models.AbstractModel):
         root_logger.addHandler(handler)
         
         return super(RabbitMQLogStarter, self)._register_hook()
-
-# Start the logging system automatically with a delay
-def delayed_start():
-    time.sleep(3)  # Give Odoo time to start
-
-    handler = RabbitMQLogHandler()
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    handler.setLevel(logging.INFO)
-
-    # ensure INFO-level messages from other addons propagate
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)           # <-- add this
-    root_logger.addHandler(handler)
-
-    # Start thread
-    global log_thread
-    if log_thread is None or not log_thread.is_alive():
-        log_thread = threading.Thread(target=log_sender_thread, daemon=True)
-        log_thread.start()
-
-# Start automatically
-threading.Thread(target=delayed_start, daemon=True).start()
 
 def log_customer_event(action, customer_name, customer_id, external_id=None):
     """Log customer creation/update/deletion events"""
