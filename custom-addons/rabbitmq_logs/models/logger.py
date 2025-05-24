@@ -190,7 +190,7 @@ class RabbitMQLogHandler(logging.Handler):
             # --- NEW: keyword override for addons that always log INFO ---
             text = record.getMessage().lower()
             if status == "INFO":
-                if "error " in text or text.startswith("error"):
+                if "error" in text or "failed" in text:
                     status = "ERROR"
                 elif "warning " in text or text.startswith("warning"):
                     status = "WARNING"

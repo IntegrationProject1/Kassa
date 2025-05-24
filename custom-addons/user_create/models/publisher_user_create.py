@@ -117,11 +117,11 @@ class ResPartner(models.Model):
             
             is_valid = schema.validate(xml_doc)
             if not is_valid:
-                log_message(f"XML validation errors: {schema.error_log}")
+                log_message(f"Error: XML validation errors: {schema.error_log}")
                 
             return is_valid
         except Exception as e:
-            log_message(f"XML validation error: {e}")
+            log_message(f"Error: XML validation error: {e}")
             return False
     
     def create_customer_create_message(self, partner_data):
@@ -152,7 +152,7 @@ class ResPartner(models.Model):
         # Validate against XSD schema
         is_valid = self.validate_xml_against_xsd(xml_string, USER_CREATE_XSD)
         if not is_valid:
-            log_message("Generated XML does not conform to XSD schema")
+            log_message("Warning: Generated XML does not conform to XSD schema")
             
         return xml_string
     
@@ -206,7 +206,7 @@ class ResPartner(models.Model):
             return success_count > 0
             
         except Exception as e:
-            log_message(f"Failed to publish customer create message: {e}")
+            log_message(f"Error: Failed to publish customer create message: {e}")
             return False
     
     def _publish_qr_email(self):
@@ -326,7 +326,7 @@ class ResPartner(models.Model):
         # Validate against XSD schema
         is_valid = self.validate_xml_against_xsd(xml_string, EMAIL_XSD_SCHEMA)
         if not is_valid:
-            log_message("Generated email XML does not conform to XSD schema")
+            log_message("Error: Generated email XML does not conform to XSD schema")
         
         return xml_string
 

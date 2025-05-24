@@ -114,7 +114,7 @@ class UserDeleteThread(threading.Thread):
                                         log_message(f"Message from {queue} processed successfully")
                                     else:
                                         ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-                                        log_message(f"Message from {queue} processing failed")
+                                        log_message(f"Error: Message from {queue} processing failed")
                                 except Exception as e:
                                     log_message(f"Error processing message from {queue}: {str(e)}")
                                     log_message(traceback.format_exc())
@@ -146,7 +146,7 @@ class UserDeleteThread(threading.Thread):
                             break
                 
             except Exception as e:
-                log_message(f"RabbitMQ connection error: {str(e)}")
+                log_message(f"Error: RabbitMQ connection error: {str(e)}")
                 log_message(traceback.format_exc())
                 # Wait before retrying
                 time.sleep(10)
@@ -184,16 +184,16 @@ class UserDeleteThread(threading.Thread):
                 # Validate
                 if not schema.validate(xml_doc):
                     validation_errors = schema.error_log
-                    log_message(f"XML validation errors: {validation_errors}")
+                    log_message(f"Error: XML validation errors: {validation_errors}")
                     return False
                     
                 log_message("XML message validated successfully against schema")
                 
             except etree.XMLSyntaxError as xml_err:
-                log_message(f"XML syntax error: {str(xml_err)}")
+                log_message(f"Error: XML syntax error: {str(xml_err)}")
                 return False
             except Exception as validate_err:
-                log_message(f"XML validation error: {str(validate_err)}")
+                log_message(f"Error: XML validation error: {str(validate_err)}")
                 return False
             
             # Create a new environment with a new cursor
@@ -219,30 +219,30 @@ class UserDeleteThread(threading.Thread):
                     if action_type is not None:
                         log_message(f"Found ActionType: '{action_type.text}'")
                     else:
-                        log_message("ActionType element not found")
+                        log_message("Error: ActionType element not found")
                         return False
                         
                     if uuid_elem is not None:
                         log_message(f"Found UUID: '{uuid_elem.text}'")
                     else:
-                        log_message("UUID element not found")
+                        log_message("Error: UUID element not found")
                         return False
                     
                     if time_of_action is not None:
                         log_message(f"Found TimeOfAction: '{time_of_action.text}'")
                     else:
-                        log_message("TimeOfAction element not found")
+                        log_message("Error: TimeOfAction element not found")
                         return False
                     
                     # Check if elements have text content
                     if not action_type.text or action_type.text.strip() == '':
-                        log_message("ActionType element has no text")
+                        log_message("Warning: ActionType element has no text")
                         return False
                     if not uuid_elem.text or uuid_elem.text.strip() == '':
-                        log_message("UUID element has no text")
+                        log_message("Warning: UUID element has no text")
                         return False
                     if not time_of_action.text or time_of_action.text.strip() == '':
-                        log_message("TimeOfAction element has no text")
+                        log_message("Warning: TimeOfAction element has no text")
                         return False
                     
                     # Check if action is DELETE (with case and whitespace handling)
@@ -262,12 +262,12 @@ class UserDeleteThread(threading.Thread):
                     if customer:
                         log_message(f"Found customer by external_id={uuid_value}: ID={customer.id}, Name={customer.name}")
                     else:
-                        log_message(f"No customer found with external_id or database ID={uuid_value}")
+                        log_message(f"Warning: No customer found with external_id or database ID={uuid_value}")
                         return False
                     
                     # Don't delete admin users
                     if customer.id <= 2:  # Also protect admin (2)
-                        log_message(f"Cannot delete system user with ID: {customer.id}")
+                        log_message(f"Warning: Cannot delete system user with ID: {customer.id}")
                         return False
                     
                     # Store customer info before deletion
@@ -294,7 +294,7 @@ class UserDeleteThread(threading.Thread):
                         log_message(f"Error during customer deletion: {str(delete_error)}")
                         log_message(traceback.format_exc())
                         new_cr.rollback()
-                        log_message("Rolling back transaction")
+                        log_message("Warning: Rolling back transaction")
                         return False
                         
                 except Exception as e:

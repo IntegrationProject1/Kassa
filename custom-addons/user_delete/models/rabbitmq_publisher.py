@@ -55,11 +55,11 @@ class RabbitMQPublisher(models.AbstractModel):
             
             is_valid = schema.validate(xml_doc)
             if not is_valid:
-                log_message(f"XML validation errors: {schema.error_log}")
+                log_message(f"Error: XML validation errors: {schema.error_log}")
                 
             return is_valid
         except Exception as e:
-            log_message(f"XML validation error: {e}")
+            log_message(f"Error: XML validation error: {e}")
             return False
     
     def create_customer_delete_message(self, customer_id, external_id=None):
@@ -91,7 +91,7 @@ class RabbitMQPublisher(models.AbstractModel):
         # Validate against XSD schema
         is_valid = self.validate_xml_against_xsd(xml_string, USER_MESSAGE_XSD)
         if not is_valid:
-            log_message("Generated XML does not conform to XSD schema")
+            log_message("Error: Generated XML does not conform to XSD schema")
             
         return xml_string
     
@@ -163,11 +163,11 @@ class RabbitMQPublisher(models.AbstractModel):
             return success_count > 0
             
         except pika.exceptions.AMQPConnectionError as e:
-            error_msg = f"RabbitMQ connection error: {e}"
+            error_msg = f"Error: RabbitMQ connection error: {e}"
             log_message(error_msg)
             return False
         except Exception as e:
-            error_msg = f"Failed to publish customer deletion message: {e}"
+            error_msg = f"Error: Failed to publish customer deletion message: {e}"
             log_message(error_msg)
             return False
         

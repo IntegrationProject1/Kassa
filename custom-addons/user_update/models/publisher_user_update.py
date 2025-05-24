@@ -64,7 +64,7 @@ try:
     from odoo.addons.user_create.models.publisher_user_create import prevention_registry
     log_message("Successfully imported prevention registry")
 except ImportError:
-    log_message("Could not import prevention registry, creating local instance")
+    log_message("Warning: Could not import prevention registry, creating local instance")
     class PreventionRegistry:
         recently_created_partners = set()
     prevention_registry = PreventionRegistry()
@@ -90,11 +90,11 @@ class ResPartner(models.Model):
             
             is_valid = schema.validate(xml_doc)
             if not is_valid:
-                log_message(f"XML validation errors: {schema.error_log}")
+                log_message(f"Error: XML validation errors: {schema.error_log}")
                 
             return is_valid
         except Exception as e:
-            log_message(f"XML validation error: {e}")
+            log_message(f"Error: XML validation error: {e}")
             return False
     
     def create_customer_update_message(self, partner_data):
@@ -125,7 +125,7 @@ class ResPartner(models.Model):
         # Validate against XSD schema
         is_valid = self.validate_xml_against_xsd(xml_string, USER_UPDATE_XSD)
         if not is_valid:
-            log_message("Generated XML does not conform to XSD schema")
+            log_message("Error: Generated XML does not conform to XSD schema")
             
         return xml_string
     
@@ -178,7 +178,7 @@ class ResPartner(models.Model):
             return success_count > 0
             
         except Exception as e:
-            log_message(f"Failed to publish customer update message: {e}")
+            log_message(f"Error: Failed to publish customer update message: {e}")
             return False
     
     def write(self, vals):

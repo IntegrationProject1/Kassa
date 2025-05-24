@@ -67,7 +67,7 @@ def _validate_iso8601_zulu(value, field_name, require_microseconds=False):
         pattern = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$"
 
     if not re.match(pattern, value):
-        log_message(f"Invalid {field_name}: '{value}' — must match ISO 8601{' with 6-digit microseconds' if require_microseconds else ''} and end with 'Z'")
+        log_message(f"Error: Invalid {field_name}: '{value}' — must match ISO 8601{' with 6-digit microseconds' if require_microseconds else ''} and end with 'Z'")
         return False
 
     try:
@@ -76,7 +76,7 @@ def _validate_iso8601_zulu(value, field_name, require_microseconds=False):
         try:
             datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
         except ValueError:
-            log_message(f"Invalid {field_name}: '{value}' — unparseable datetime")
+            log_message(f"Error: Invalid {field_name}: '{value}' — unparseable datetime")
             return False
 
     return True
@@ -146,15 +146,15 @@ class EventCreateThread(threading.Thread):
 
             # Strict validation for UUID format: requires exactly 6 microsecond digits
             if not _validate_iso8601_zulu(uuid, "EventUUID", require_microseconds=True):
-                log_message("Aborting message processing due to invalid EventUUID format.")
+                log_message("Warning: Aborting message processing due to invalid EventUUID format.")
                 return
 
             if not _validate_iso8601_zulu(start_datetime, "StartDateTime"):
-                log_message("Aborting message processing due to invalid StartDateTime format.")
+                log_message("Warning: Aborting message processing due to invalid StartDateTime format.")
                 return
 
             if not _validate_iso8601_zulu(end_datetime, "EndDateTime"):
-                log_message("Aborting message processing due to invalid EndDateTime format.")
+                log_message("Warning: Aborting message processing due to invalid EndDateTime format.")
                 return
 
             vals = {
