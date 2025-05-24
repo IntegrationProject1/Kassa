@@ -23,12 +23,15 @@ DELETE_EVENT_XSD = '''<?xml version="1.0" encoding="UTF-8"?>
     <xs:element name="DeleteEvent">
         <xs:complexType>
             <xs:sequence>
-                <xs:element name="UUID" type="xs:dateTime"/>
+                <xs:element name="ActionType" type="xs:string"/>
+                <xs:element name="EventUUID" type="xs:dateTime"/>
+                <xs:element name="TimeOfAction" type="xs:dateTime"/>
             </xs:sequence>
         </xs:complexType>
     </xs:element>
 </xs:schema>
 '''
+
 
 def log_message(message):
     print(f"[EVENT_DELETE_CONSUMER] {message}")
@@ -89,8 +92,9 @@ class EventDeleteThread(threading.Thread):
                 log_message(f"XML validation failed:\n{error_details}")
                 raise ValueError("Invalid XML structure")
 
-            uuid = xml.findtext('UUID')
+            uuid = xml.findtext('EventUUID')
             log_message(f"Attempting to delete event with UUID: {uuid}")
+
 
             event = env['event.event'].search([('uuid', '=', uuid)], limit=1)
             if event:
