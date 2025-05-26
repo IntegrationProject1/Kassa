@@ -613,4 +613,4 @@ class OrderRabbitMQPublisher(models.AbstractModel):
             return
         
         log_message(f"Sending event summary for user {user_uuid} in event {event.name} to queue")
-        self._publish_message(xml_str, queue_name="facturatie.order.event")
+        self._publish_message(xml_str, queue_name="order.created")
